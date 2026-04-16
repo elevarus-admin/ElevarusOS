@@ -11,6 +11,8 @@ import { logger } from "../../../core/logger";
  * Uses Claude to generate a first-pass research package:
  * topic framing, subtopics, questions to answer, source suggestions,
  * and keyword notes.
+ *
+ * ✏️  Tune this stage:  src/workflows/blog/prompts/research.md
  */
 export class ResearchStage implements IBlogStage {
   readonly stageName = "research";
@@ -18,13 +20,9 @@ export class ResearchStage implements IBlogStage {
   async run(job: Job): Promise<ResearchOutput> {
     logger.info("Running research stage", { jobId: job.id });
 
-    const userPrompt = buildResearchPrompt(job.request);
+    const { systemPrompt, userPrompt } = buildResearchPrompt(job.request);
 
-    const result = await claudeJSON<ResearchOutput>(
-      "You are an expert content strategist. Return only valid JSON.",
-      userPrompt,
-      job.id
-    );
+    const result = await claudeJSON<ResearchOutput>(systemPrompt, userPrompt, job.id);
 
     logger.info("Research stage complete", {
       jobId: job.id,

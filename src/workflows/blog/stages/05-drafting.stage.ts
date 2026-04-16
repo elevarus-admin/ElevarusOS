@@ -10,6 +10,8 @@ import { logger } from "../../../core/logger";
  *
  * Uses Claude to write a complete first-draft blog post from the outline
  * and research produced in previous stages.
+ *
+ * ✏️  Tune this stage:  src/workflows/blog/prompts/draft.md
  */
 export class DraftingStage implements IBlogStage {
   readonly stageName = "drafting";
@@ -19,14 +21,9 @@ export class DraftingStage implements IBlogStage {
 
     const research = requireStageOutput<ResearchOutput>(job, "research");
     const outline = requireStageOutput<OutlineOutput>(job, "outline");
+    const { systemPrompt, userPrompt } = buildDraftPrompt(job.request, research, outline);
 
-    const userPrompt = buildDraftPrompt(job.request, research, outline);
-
-    const result = await claudeJSON<DraftOutput>(
-      "You are a professional blog writer. Return only valid JSON.",
-      userPrompt,
-      job.id
-    );
+    const result = await claudeJSON<DraftOutput>(systemPrompt, userPrompt, job.id);
 
     logger.info("Drafting stage complete", {
       jobId: job.id,

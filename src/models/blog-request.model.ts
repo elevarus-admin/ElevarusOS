@@ -28,7 +28,14 @@ export interface BlogRequest {
   rawSource: RawSource;
 
   /** Fields that were missing from the source and need follow-up */
-  missingFields: Array<keyof Omit<BlogRequest, "rawSource" | "missingFields">>;
+  missingFields: Array<keyof Omit<BlogRequest, "rawSource" | "missingFields" | "workflowType">>;
+
+  /**
+   * Which registered bot instance should handle this request.
+   * Set by the intake adapter at construction time (e.g. "elevarus-blog", "nes-blog").
+   * Defaults to "blog" in the orchestrator if not supplied.
+   */
+  workflowType?: string;
 }
 
 export type SourceChannel = "clickup" | "email" | "manual";

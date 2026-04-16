@@ -14,22 +14,13 @@ export type JobStatus =
 
 export type StageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 
-export const BLOG_STAGES = [
-  "intake",
-  "normalization",
-  "research",
-  "outline",
-  "drafting",
-  "editorial",
-  "approval_notify",
-  "publish_placeholder",
-  "completion",
-] as const;
-
-export type BlogStageName = (typeof BLOG_STAGES)[number];
-
+/**
+ * One record per stage in a job. `name` is a plain string matching the
+ * stageName declared on the corresponding IStage implementation — it is
+ * workflow-agnostic and not restricted to blog stage names.
+ */
 export interface StageRecord {
-  name: BlogStageName;
+  name: string;
   status: StageStatus;
   startedAt?: string;
   completedAt?: string;
@@ -41,9 +32,22 @@ export interface StageRecord {
 
 // ─── Job ──────────────────────────────────────────────────────────────────────
 
+/**
+ * A Job represents one unit of orchestrated work — e.g. a single blog post
+ * through the full blog workflow, or a social post through a different workflow.
+ *
+ * `workflowType` is a plain string that matches a WorkflowDefinition.type in
+ * the WorkflowRegistry — this is what makes the orchestrator multi-bot capable.
+ *
+ * NOTE: `request` is typed as BlogRequest today because it is the only
+ * workflow currently implemented. When additional workflow types are added,
+ * this should become a discriminated union or a generic `WorkflowRequest`
+ * base type.
+ */
 export interface Job {
   id: string;
-  workflowType: "blog";
+  /** Matches WorkflowDefinition.type in the WorkflowRegistry */
+  workflowType: string;
   status: JobStatus;
   request: BlogRequest;
   stages: StageRecord[];

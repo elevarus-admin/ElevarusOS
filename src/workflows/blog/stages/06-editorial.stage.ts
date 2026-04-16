@@ -10,6 +10,8 @@ import { logger } from "../../../core/logger";
  *
  * Uses Claude to review and refine the first draft for clarity, flow,
  * SEO keyword placement, and CTA strength.
+ *
+ * ✏️  Tune this stage:  src/workflows/blog/prompts/editorial.md
  */
 export class EditorialStage implements IBlogStage {
   readonly stageName = "editorial";
@@ -18,13 +20,9 @@ export class EditorialStage implements IBlogStage {
     logger.info("Running editorial stage", { jobId: job.id });
 
     const draft = requireStageOutput<DraftOutput>(job, "drafting");
-    const userPrompt = buildEditorialPrompt(job.request, draft);
+    const { systemPrompt, userPrompt } = buildEditorialPrompt(job.request, draft);
 
-    const result = await claudeJSON<EditorialOutput>(
-      "You are a senior content editor. Return only valid JSON.",
-      userPrompt,
-      job.id
-    );
+    const result = await claudeJSON<EditorialOutput>(systemPrompt, userPrompt, job.id);
 
     logger.info("Editorial stage complete", {
       jobId: job.id,

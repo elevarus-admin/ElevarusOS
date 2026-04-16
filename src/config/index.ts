@@ -1,6 +1,9 @@
 import * as dotenv from "dotenv";
+import * as path from "path";
 
-dotenv.config();
+// Resolve .env relative to the project root (two levels up from src/config/).
+// override:true ensures file values win over any empty shell exports.
+dotenv.config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
 function required(key: string): string {
   const value = process.env[key];
@@ -15,7 +18,7 @@ function optional(key: string, fallback: string): string {
 export const config = {
   anthropic: {
     apiKey: required("ANTHROPIC_API_KEY"),
-    model: optional("ANTHROPIC_MODEL", "claude-opus-4-6"),
+    model: optional("ANTHROPIC_MODEL", "claude-opus-4-7"),
   },
 
   clickup: {

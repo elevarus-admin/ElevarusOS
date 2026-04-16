@@ -1,43 +1,52 @@
 import { v4 as uuidv4 } from "uuid";
-import {
-  Job,
-  JobStatus,
-  StageRecord,
-  BLOG_STAGES,
-  BlogStageName,
-} from "../models/job.model";
+import { Job, JobStatus, StageRecord } from "../models/job.model";
 import { BlogRequest } from "../models/blog-request.model";
 import { IIntakeAdapter } from "../adapters/intake/intake.interface";
 import { INotifyAdapter } from "../adapters/notify/notify.interface";
-import { IBlogStage } from "../workflows/blog/stages/stage.interface";
+import { IStage } from "./stage.interface";
+import { WorkflowRegistry } from "./workflow-registry";
 import { IJobStore } from "./job-store";
 import { logger } from "./logger";
 import { config } from "../config";
 
+/** Minimal interface so orchestrator doesn't depend on MissionControlBridge directly */
+interface IDashboardBridge {
+  onJobCreated(job: Job): Promise<void>;
+  onJobUpdated(job: Job): Promise<void>;
+}
+
 /**
  * Central orchestrator for ElevarusOS.
  *
- * Responsibilities:
- * - Poll intake adapters for new blog requests
- * - Create and persist jobs
- * - Execute workflow stages in order with retry logic
- * - Track stage-level status transitions
- * - Route failure notifications
+ * The orchestrator is fully workflow-agnostic — it does not know about blogs,
+ * social posts, or any other content type. All workflow specifics live inside
+ * the WorkflowRegistry and the IStage implementations registered with it.
  *
- * Designed to support multiple workflow types in the future — the blog
- * workflow is wired in at the call site (index.ts) rather than hard-coded
- * here, keeping this class workflow-agnostic.
+ * To add a new bot:
+ *   1. Implement IStage for each step of the new workflow
+ *   2. Create a WorkflowDefinition and register it in the registry (index.ts)
+ *   3. Ensure intake adapters produce requests for that workflowType
  */
 export class Orchestrator {
   private running = false;
   private pollTimer?: ReturnType<typeof setTimeout>;
+  private bridge?: IDashboardBridge;
 
   constructor(
     private readonly jobStore: IJobStore,
     private readonly intakeAdapters: IIntakeAdapter[],
     private readonly notifiers: INotifyAdapter[],
-    private readonly stages: IBlogStage[]
+    private readonly registry: WorkflowRegistry
   ) {}
+
+  /**
+   * Attach a dashboard bridge (e.g. MissionControlBridge).
+   * When set, the orchestrator fires onJobCreated/onJobUpdated on every job event.
+   */
+  setBridge(bridge: IDashboardBridge): void {
+    this.bridge = bridge;
+    logger.info("Dashboard bridge attached", { bridge: bridge.constructor.name });
+  }
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -49,6 +58,7 @@ export class Orchestrator {
       pollIntervalMs: config.orchestrator.pollIntervalMs,
       intakeAdapters: this.intakeAdapters.map((a) => a.name),
       notifiers: this.notifiers.map((n) => n.name),
+      workflows: this.registry.registeredTypes,
     });
     void this.poll();
   }
@@ -91,10 +101,16 @@ export class Orchestrator {
       }
 
       for (const request of requests) {
-        const job = this.createJob(request);
+        const workflowType = request.workflowType ?? "blog";
+        const job = this.createJob(request, workflowType);
+        if (!job) continue;
+
         await this.jobStore.save(job);
+        // Await bridge create so taskIdMap is populated before runJob fires onJobUpdated
+        await this.bridge?.onJobCreated(job);
         logger.info("New job enqueued", {
           jobId: job.id,
+          workflowType,
           source: adapter.name,
           title: request.title,
         });
@@ -105,27 +121,41 @@ export class Orchestrator {
 
   // ─── Manual job submission (for testing / direct invocation) ─────────────
 
-  async submitJob(request: BlogRequest): Promise<Job> {
-    const job = this.createJob(request);
+  async submitJob(
+    request: BlogRequest,
+    workflowType = "blog"
+  ): Promise<Job> {
+    const job = this.createJob(request, workflowType);
+    if (!job) throw new Error(`Unknown workflowType: "${workflowType}"`);
+
     await this.jobStore.save(job);
     logger.info("Job submitted manually", { jobId: job.id, title: request.title });
+    // Await bridge create so taskIdMap is populated before runJob fires onJobUpdated
+    await this.bridge?.onJobCreated(job);
     await this.runJob(job);
     return (await this.jobStore.get(job.id))!;
   }
 
   // ─── Job creation ─────────────────────────────────────────────────────────
 
-  private createJob(request: BlogRequest): Job {
+  private createJob(request: BlogRequest, workflowType: string): Job | null {
+    const workflow = this.registry.get(workflowType);
+    if (!workflow) {
+      logger.error("No workflow registered for type — job dropped", { workflowType });
+      return null;
+    }
+
     const now = new Date().toISOString();
-    const stages: StageRecord[] = BLOG_STAGES.map((name) => ({
-      name,
+    // Derive stage names from the IStage instances — single source of truth
+    const stages: StageRecord[] = workflow.stages.map((s) => ({
+      name: s.stageName,
       status: "pending",
       attempts: 0,
     }));
 
     return {
       id: uuidv4(),
-      workflowType: "blog",
+      workflowType,
       status: "queued",
       request,
       stages,
@@ -138,18 +168,23 @@ export class Orchestrator {
   // ─── Workflow execution ───────────────────────────────────────────────────
 
   private async runJob(job: Job): Promise<void> {
+    const workflow = this.registry.get(job.workflowType);
+    if (!workflow) {
+      await this.failJob(job, `No workflow registered for type "${job.workflowType}"`);
+      return;
+    }
+
     job.status = "running";
     job.updatedAt = new Date().toISOString();
     await this.jobStore.save(job);
+    await this.bridge?.onJobUpdated(job);
 
     logger.info("Job started", { jobId: job.id, title: job.request.title });
 
     await Promise.allSettled(this.notifiers.map((n) => n.sendJobStarted(job)));
 
-    for (const stage of this.stages) {
-      const stageRecord = job.stages.find(
-        (s) => s.name === (stage.stageName as BlogStageName)
-      );
+    for (const stage of workflow.stages) {
+      const stageRecord = job.stages.find((s) => s.name === stage.stageName);
 
       if (!stageRecord) {
         logger.warn("Stage record not found — skipping", {
@@ -166,11 +201,12 @@ export class Orchestrator {
         return;
       }
 
-      // After approval_notify, flip the job status so callers know we're waiting
+      // After approval_notify, flip status so callers know we're waiting
       if (stage.stageName === "approval_notify") {
         job.status = "awaiting_approval";
         job.updatedAt = new Date().toISOString();
         await this.jobStore.save(job);
+        await this.bridge?.onJobUpdated(job);
       }
     }
 
@@ -178,13 +214,14 @@ export class Orchestrator {
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
     await this.jobStore.save(job);
+    await this.bridge?.onJobUpdated(job);
 
     logger.info("Job completed", { jobId: job.id });
   }
 
   private async runStageWithRetry(
     job: Job,
-    stage: IBlogStage,
+    stage: IStage,
     record: StageRecord
   ): Promise<boolean> {
     const maxAttempts = config.orchestrator.maxStageRetries + 1;
@@ -246,6 +283,7 @@ export class Orchestrator {
     job.error = reason;
     job.updatedAt = new Date().toISOString();
     await this.jobStore.save(job);
+    await this.bridge?.onJobUpdated(job);
 
     logger.error("Job failed", { jobId: job.id, reason });
 

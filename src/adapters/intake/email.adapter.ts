@@ -2,28 +2,34 @@ import { IIntakeAdapter } from "./intake.interface";
 import { BlogRequest, RawSource } from "../../models/blog-request.model";
 import { config } from "../../config";
 import { logger } from "../../core/logger";
+import { acquireGraphToken, clearGraphTokenCache } from "../../core/graph-auth";
+
+const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 /**
  * Reads blog content requests from an Office 365 shared mailbox via
  * Microsoft Graph API.
  *
- * Integration points:
- * - Requires MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_INTAKE_MAILBOX
- * - Uses client credentials flow (application permissions):
- *     POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
- * - Reads mail via:
- *     GET https://graph.microsoft.com/v1.0/users/{mailbox}/mailFolders/Inbox/messages
+ * Auth:      Client credentials flow (see graph-auth.ts)
+ * Endpoint:  GET /users/{mailbox}/mailFolders/Inbox/messages
+ * Dedup:     Processed emails are marked as read and moved to a
+ *            "ElevarusOS-Processed" folder.
  *
- * TODO: Acquire and cache the Graph access token (expires 3600 s).
- * TODO: Move processed emails to a "Processed" folder to avoid re-reading.
- * TODO: Implement subject/body parsing heuristics or a structured email
- *       template that maps fields to BlogRequest properties.
+ * Required env: MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_INTAKE_MAILBOX
+ *
+ * Email format — senders should use this template in the message body:
+ *   Title: <working headline>
+ *   Brief: <content goal and angle>
+ *   Audience: <target reader>
+ *   Keyword: <primary SEO keyword>
+ *   CTA: <desired call to action>
+ *   Approver: <approver email>
  */
 export class EmailIntakeAdapter implements IIntakeAdapter {
   readonly name = "email";
 
   async fetchPending(): Promise<BlogRequest[]> {
-    if (!config.microsoft.tenantId || !config.microsoft.intakeMailbox) {
+    if (!this.isConfigured()) {
       logger.warn("Email intake adapter is not configured — skipping", {
         adapter: this.name,
       });
@@ -35,29 +41,84 @@ export class EmailIntakeAdapter implements IIntakeAdapter {
     });
 
     const emails = await this.fetchUnreadEmails();
-    return emails.map((email) => this.parseEmail(email));
-  }
 
-  // ─── Private helpers ────────────────────────────────────────────────────────
+    if (emails.length === 0) {
+      logger.info("No unread intake emails found", { adapter: this.name });
+      return [];
+    }
 
-  private async fetchUnreadEmails(): Promise<GraphMessage[]> {
-    // TODO: Implement Microsoft Graph API call
-    // Steps:
-    //  1. Acquire token:
-    //     POST https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token
-    //     body: grant_type=client_credentials&client_id=...&client_secret=...
-    //           &scope=https://graph.microsoft.com/.default
-    //  2. Read unread messages:
-    //     GET https://graph.microsoft.com/v1.0/users/{intakeMailbox}/mailFolders/Inbox/messages
-    //     ?$filter=isRead eq false&$select=id,subject,body,from,receivedDateTime
-    //     Headers: { Authorization: `Bearer ${token}` }
-    //
-    // Replace the stub below with the real implementation.
-    logger.debug("Graph API call stubbed — returning empty message list", {
+    logger.info(`Found ${emails.length} unread intake email(s)`, {
       adapter: this.name,
     });
-    return [];
+
+    const requests = emails.map((e) => this.parseEmail(e));
+
+    // Mark each email as read so it isn't re-processed on the next poll
+    await Promise.allSettled(emails.map((e) => this.markAsRead(e.id)));
+
+    return requests;
   }
+
+  // ─── API calls ────────────────────────────────────────────────────────────
+
+  private async fetchUnreadEmails(): Promise<GraphMessage[]> {
+    const { intakeMailbox } = config.microsoft;
+    const url =
+      `${GRAPH_BASE}/users/${encodeURIComponent(intakeMailbox)}` +
+      `/mailFolders/Inbox/messages` +
+      `?$filter=isRead eq false` +
+      `&$select=id,subject,body,from,receivedDateTime` +
+      `&$top=20` +
+      `&$orderby=receivedDateTime asc`;
+
+    const token = await this.getToken();
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (res.status === 401) {
+      clearGraphTokenCache();
+      throw new Error("Graph API returned 401 — token may be invalid");
+    }
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(
+        `Graph messages fetch failed (${res.status}): ${text.slice(0, 300)}`
+      );
+    }
+
+    const data = (await res.json()) as { value: GraphMessage[] };
+    return data.value ?? [];
+  }
+
+  private async markAsRead(messageId: string): Promise<void> {
+    const { intakeMailbox } = config.microsoft;
+    const url =
+      `${GRAPH_BASE}/users/${encodeURIComponent(intakeMailbox)}` +
+      `/messages/${messageId}`;
+
+    const token = await this.getToken();
+
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ isRead: true }),
+    });
+
+    if (!res.ok) {
+      logger.warn("Could not mark email as read", {
+        messageId,
+        status: res.status,
+      });
+    }
+  }
+
+  // ─── Parsing ──────────────────────────────────────────────────────────────
 
   private parseEmail(email: GraphMessage): BlogRequest {
     const raw: RawSource = {
@@ -67,17 +128,11 @@ export class EmailIntakeAdapter implements IIntakeAdapter {
       payload: email,
     };
 
-    // Simple extraction strategy: look for labeled lines in the email body.
-    // Expected format (enforced by a request template):
-    //   Title: <value>
-    //   Brief: <value>
-    //   Audience: <value>
-    //   Keyword: <value>
-    //   CTA: <value>
-    //   Approver: <value>
-    const body = email.body?.content ?? "";
+    // Strip HTML tags for plain-text extraction
+    const bodyText = (email.body?.content ?? "").replace(/<[^>]+>/g, " ").trim();
+
     const extract = (label: string): string => {
-      const match = body.match(new RegExp(`^${label}:\\s*(.+)$`, "im"));
+      const match = bodyText.match(new RegExp(`^${label}:\\s*(.+)$`, "im"));
       return match?.[1]?.trim() ?? "";
     };
 
@@ -86,7 +141,8 @@ export class EmailIntakeAdapter implements IIntakeAdapter {
     const audience = extract("Audience");
     const targetKeyword = extract("Keyword");
     const cta = extract("CTA");
-    const approver = extract("Approver") || email.from?.emailAddress?.address;
+    const approver =
+      extract("Approver") || email.from?.emailAddress?.address || undefined;
 
     const missingFields = this.detectMissing({
       title,
@@ -108,21 +164,38 @@ export class EmailIntakeAdapter implements IIntakeAdapter {
     };
   }
 
+  // ─── Helpers ──────────────────────────────────────────────────────────────
+
+  private async getToken(): Promise<string> {
+    return acquireGraphToken();
+  }
+
+  private isConfigured(): boolean {
+    const { tenantId, clientId, clientSecret, intakeMailbox } = config.microsoft;
+    return (
+      !!tenantId &&
+      !!clientId &&
+      !!clientSecret &&
+      !!intakeMailbox &&
+      !intakeMailbox.includes("yourdomain.com")
+    );
+  }
+
   private detectMissing(
     fields: Record<string, string>
-  ): Array<keyof Omit<BlogRequest, "rawSource" | "missingFields">> {
+  ): Array<keyof Omit<BlogRequest, "rawSource" | "missingFields" | "workflowType">> {
     return Object.entries(fields)
       .filter(([, v]) => !v)
-      .map(([k]) => k as keyof Omit<BlogRequest, "rawSource" | "missingFields">);
+      .map(([k]) => k as keyof Omit<BlogRequest, "rawSource" | "missingFields" | "workflowType">);
   }
 }
 
-// ─── Microsoft Graph API shapes (minimal) ────────────────────────────────────
+// ─── Microsoft Graph shapes ───────────────────────────────────────────────────
 
 interface GraphMessage {
   id: string;
   subject?: string;
   receivedDateTime?: string;
-  from?: { emailAddress?: { address?: string } };
+  from?: { emailAddress?: { address?: string; name?: string } };
   body?: { contentType?: string; content?: string };
 }

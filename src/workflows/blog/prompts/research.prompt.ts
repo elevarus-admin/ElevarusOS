@@ -1,41 +1,28 @@
+import * as path from "path";
 import { BlogRequest } from "../../../models/blog-request.model";
+import { loadPrompt, PromptResult } from "../../../core/prompt-loader";
 
-export function buildResearchPrompt(request: BlogRequest): string {
-  return `You are an expert content strategist and researcher for a digital marketing agency.
+const TEMPLATE = path.join(__dirname, "research.md");
 
-Your task is to create a structured research package for a blog post based on the following request.
-
-<request>
-Title: ${request.title}
-Brief: ${request.brief}
-Target audience: ${request.audience}
-Primary keyword: ${request.targetKeyword}
-CTA: ${request.cta}
-</request>
-
-Produce a research package in the following JSON format — return ONLY valid JSON, no markdown fences or explanation:
-
-{
-  "topicFraming": "<2-3 sentences framing the topic angle, key argument, and reader takeaway>",
-  "subtopics": [
-    "<subtopic 1>",
-    "<subtopic 2>",
-    "<subtopic 3>",
-    "<subtopic 4>",
-    "<subtopic 5>"
-  ],
-  "questionsToAnswer": [
-    "<key question the blog post should answer 1>",
-    "<key question 2>",
-    "<key question 3>",
-    "<key question 4>",
-    "<key question 5>"
-  ],
-  "sourceSuggestions": [
-    "<type of source or publication worth citing 1>",
-    "<type of source 2>",
-    "<type of source 3>"
-  ],
-  "keywordNotes": "<notes on the primary keyword, related terms, and how to use them naturally>"
-}`;
+/**
+ * Builds the research stage prompt from research.md.
+ *
+ * ✏️  To tune the base prompt:    src/workflows/blog/prompts/research.md
+ * ✏️  Per-client override:        src/clients/{clientId}/blog/research.md
+ *
+ * Client brand vars (BRAND_VOICE, BRAND_AUDIENCE, etc.) are automatically
+ * injected when the request has a clientId set.
+ */
+export function buildResearchPrompt(request: BlogRequest): PromptResult {
+  return loadPrompt(
+    TEMPLATE,
+    {
+      TITLE: request.title,
+      BRIEF: request.brief,
+      AUDIENCE: request.audience || "{{BRAND_AUDIENCE}}",
+      KEYWORD: request.targetKeyword,
+      CTA: request.cta,
+    },
+    { instanceId: request.workflowType }
+  );
 }

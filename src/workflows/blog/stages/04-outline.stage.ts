@@ -10,6 +10,8 @@ import { logger } from "../../../core/logger";
  *
  * Uses Claude to generate a structured content outline based on the
  * research package produced in stage 3.
+ *
+ * ✏️  Tune this stage:  src/workflows/blog/prompts/outline.md
  */
 export class OutlineStage implements IBlogStage {
   readonly stageName = "outline";
@@ -18,13 +20,9 @@ export class OutlineStage implements IBlogStage {
     logger.info("Running outline stage", { jobId: job.id });
 
     const research = requireStageOutput<ResearchOutput>(job, "research");
-    const userPrompt = buildOutlinePrompt(job.request, research);
+    const { systemPrompt, userPrompt } = buildOutlinePrompt(job.request, research);
 
-    const result = await claudeJSON<OutlineOutput>(
-      "You are an expert content strategist. Return only valid JSON.",
-      userPrompt,
-      job.id
-    );
+    const result = await claudeJSON<OutlineOutput>(systemPrompt, userPrompt, job.id);
 
     logger.info("Outline stage complete", {
       jobId: job.id,

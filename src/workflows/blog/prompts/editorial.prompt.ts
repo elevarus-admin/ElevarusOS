@@ -1,32 +1,23 @@
+import * as path from "path";
 import { BlogRequest } from "../../../models/blog-request.model";
 import { DraftOutput } from "../../../models/output.model";
+import { loadPrompt, PromptResult } from "../../../core/prompt-loader";
 
+const TEMPLATE = path.join(__dirname, "editorial.md");
+
+/**
+ * Builds the editorial stage prompt from editorial.md.
+ *
+ * ✏️  To tune editorial rules, quality standards, or the JSON output schema:
+ *     edit  src/workflows/blog/prompts/editorial.md
+ */
 export function buildEditorialPrompt(
   request: BlogRequest,
   draft: DraftOutput
-): string {
-  return `You are a senior content editor at a digital marketing agency.
-
-Review and improve the draft blog post below. Your goals:
-- Improve clarity, flow, and sentence variety
-- Strengthen the hook and the CTA closing
-- Ensure the primary keyword ("${request.targetKeyword}") is used naturally and effectively
-- Fix any awkward phrasing, repetition, or structural issues
-- Do NOT change the topic, the core argument, or add fabricated statistics
-- Keep the word count within 10% of the original
-
-<draft_title>${draft.title}</draft_title>
-
-<draft_body>
-${draft.body}
-</draft_body>
-
-Return ONLY valid JSON — no markdown fences or explanation:
-
-{
-  "title": "<final edited title>",
-  "body": "<full edited markdown body>",
-  "wordCount": <integer>,
-  "editSummary": "<2-3 sentences summarising what was changed and why>"
-}`;
+): PromptResult {
+  return loadPrompt(TEMPLATE, {
+    KEYWORD: request.targetKeyword,
+    DRAFT_TITLE: draft.title,
+    DRAFT_BODY: draft.body,
+  });
 }

@@ -4,25 +4,36 @@ import { EditorialOutput } from "../../models/output.model";
 import { config } from "../../config";
 import { logger } from "../../core/logger";
 
+const SLACK_API = "https://slack.com/api";
+
 /**
  * Sends workflow notifications to a Slack channel via the Slack Web API.
  *
- * Integration points:
- * - Requires SLACK_BOT_TOKEN and SLACK_NOTIFY_CHANNEL in env
- * - Uses chat.postMessage: POST https://slack.com/api/chat.postMessage
- *   Headers: { Authorization: `Bearer ${token}` }
+ * Auth:      Bot token (xoxb-...) via Authorization header
+ * Endpoint:  POST /chat.postMessage
  *
- * TODO: Add thread support — keep all messages for a job in one thread
- *       using the timestamp (ts) returned from the first postMessage call.
- * TODO: Add Block Kit layouts for richer approval request messages.
+ * Thread support: the ts of the first message for each job is stored in
+ * memory so all subsequent messages are threaded under it. This keeps the
+ * channel feed clean — only the job-started message appears at the top
+ * level; everything else is a reply.
  */
 export class SlackNotifyAdapter implements INotifyAdapter {
   readonly name = "slack";
 
+  /** job.id → parent thread_ts */
+  private readonly threadTs = new Map<string, string>();
+
   async sendJobStarted(job: Job): Promise<void> {
-    await this.post({
-      text: `*Blog workflow started* :rocket:\n*Job:* \`${job.id}\`\n*Title:* ${job.request.title}\n*Keyword:* ${job.request.targetKeyword}`,
+    const ts = await this.post({
+      text: [
+        `*Blog workflow started* :rocket:`,
+        `*Job:* \`${job.id}\``,
+        `*Title:* ${job.request.title}`,
+        `*Keyword:* ${job.request.targetKeyword}`,
+        `*Approver:* ${job.request.approver ?? "—"}`,
+      ].join("\n"),
     });
+    if (ts) this.threadTs.set(job.id, ts);
   }
 
   async sendApprovalRequest(job: Job): Promise<void> {
@@ -32,63 +43,127 @@ export class SlackNotifyAdapter implements INotifyAdapter {
       ? editorial.body.slice(0, 400) + (editorial.body.length > 400 ? "…" : "")
       : "_Draft not yet available_";
 
-    await this.post({
-      text: [
-        `*Draft ready for approval* :pencil2:`,
-        `*Job:* \`${job.id}\``,
-        `*Title:* ${editorial?.title ?? job.request.title}`,
-        `*Words:* ${wordCount}`,
-        `*Approver:* ${job.request.approver ?? "—"}`,
-        `\n*Preview:*\n${preview}`,
-        `\n_Reply to this message or update the approval record to approve._`,
-      ].join("\n"),
-    });
+    await this.post(
+      {
+        text: [
+          `*Draft ready for approval* :pencil2:`,
+          `*Job:* \`${job.id}\``,
+          `*Title:* ${editorial?.title ?? job.request.title}`,
+          `*Words:* ${wordCount}`,
+          `*Edit summary:* ${editorial?.editSummary ?? "—"}`,
+          ``,
+          `*Preview:*`,
+          preview,
+          ``,
+          `_To approve, update the job record or reply here._`,
+        ].join("\n"),
+      },
+      job.id
+    );
   }
 
   async sendFailure(job: Job, error: string): Promise<void> {
-    await this.post({
-      text: `*Workflow failed* :x:\n*Job:* \`${job.id}\`\n*Title:* ${job.request.title}\n*Error:* ${error}`,
-    });
+    await this.post(
+      {
+        text: [
+          `*Workflow failed* :x:`,
+          `*Job:* \`${job.id}\``,
+          `*Title:* ${job.request.title}`,
+          `*Error:* ${error}`,
+        ].join("\n"),
+      },
+      job.id
+    );
   }
 
   async sendCompletion(job: Job): Promise<void> {
-    await this.post({
-      text: `*Workflow completed* :white_check_mark:\n*Job:* \`${job.id}\`\n*Title:* ${job.request.title}`,
-    });
+    await this.post(
+      {
+        text: [
+          `*Workflow completed* :white_check_mark:`,
+          `*Job:* \`${job.id}\``,
+          `*Title:* ${job.request.title}`,
+        ].join("\n"),
+      },
+      job.id
+    );
   }
 
-  // ─── Private helpers ────────────────────────────────────────────────────────
+  // ─── Private helpers ──────────────────────────────────────────────────────
 
-  private async post(payload: { text: string }): Promise<void> {
-    if (!config.slack.botToken || !config.slack.notifyChannel) {
+  /**
+   * Post a message. If jobId is provided and a thread_ts exists for it,
+   * the message is sent as a thread reply.
+   * @returns The message ts on success, undefined on skip/error.
+   */
+  private async post(
+    payload: { text: string },
+    jobId?: string
+  ): Promise<string | undefined> {
+    if (!this.isConfigured()) {
       logger.warn("Slack adapter is not configured — skipping notification", {
         adapter: this.name,
       });
-      return;
+      return undefined;
+    }
+
+    const body: Record<string, unknown> = {
+      channel: config.slack.notifyChannel,
+      text: payload.text,
+    };
+
+    if (jobId) {
+      const thread = this.threadTs.get(jobId);
+      if (thread) body["thread_ts"] = thread;
     }
 
     logger.debug("Posting Slack message", {
       channel: config.slack.notifyChannel,
-      preview: payload.text.slice(0, 80),
+      threaded: !!body["thread_ts"],
     });
 
-    // TODO: Implement real Slack API call
-    // fetch("https://slack.com/api/chat.postMessage", {
-    //   method: "POST",
-    //   headers: {
-    //     "Content-Type": "application/json; charset=utf-8",
-    //     Authorization: `Bearer ${config.slack.botToken}`,
-    //   },
-    //   body: JSON.stringify({
-    //     channel: config.slack.notifyChannel,
-    //     text: payload.text,
-    //   }),
-    // });
+    const res = await fetch(`${SLACK_API}/chat.postMessage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        Authorization: `Bearer ${config.slack.botToken}`,
+      },
+      body: JSON.stringify(body),
+    });
 
-    logger.info("Slack notification stubbed", {
+    if (!res.ok) {
+      logger.error("Slack API HTTP error", {
+        adapter: this.name,
+        status: res.status,
+      });
+      return undefined;
+    }
+
+    const data = (await res.json()) as { ok: boolean; ts?: string; error?: string };
+
+    if (!data.ok) {
+      logger.error("Slack API returned error", {
+        adapter: this.name,
+        error: data.error,
+      });
+      return undefined;
+    }
+
+    logger.info("Slack message sent", {
       adapter: this.name,
-      preview: payload.text.slice(0, 120),
+      channel: config.slack.notifyChannel,
+      ts: data.ts,
     });
+
+    return data.ts;
+  }
+
+  private isConfigured(): boolean {
+    const { botToken, notifyChannel } = config.slack;
+    if (!botToken || !notifyChannel) return false;
+    // Reject obvious placeholders
+    if (botToken === "xoxb-..." || notifyChannel === "C0123456789") return false;
+    return botToken.startsWith("xoxb-");
   }
 
   private getStageOutput<T>(job: Job, stageName: string): T | undefined {

@@ -3,19 +3,17 @@ import { Job } from "../../models/job.model";
 import { EditorialOutput } from "../../models/output.model";
 import { config } from "../../config";
 import { logger } from "../../core/logger";
+import { acquireGraphToken, clearGraphTokenCache } from "../../core/graph-auth";
+
+const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 /**
- * Sends workflow notifications via Office 365 / Microsoft Graph API.
+ * Sends workflow notification emails via Office 365 / Microsoft Graph API.
  *
- * Integration points:
- * - Requires MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_NOTIFY_FROM
- * - Uses the same credentials as the email intake adapter
- * - Sends mail via:
- *     POST https://graph.microsoft.com/v1.0/users/{from}/sendMail
+ * Auth:      Shared client credentials token (see graph-auth.ts)
+ * Endpoint:  POST /users/{from}/sendMail
  *
- * TODO: Acquire and cache Graph access token (shared with email intake adapter
- *       — extract token logic into a shared GraphAuthClient utility).
- * TODO: Use HTML email templates for richer approval requests.
+ * Required env: MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_NOTIFY_FROM
  */
 export class EmailNotifyAdapter implements INotifyAdapter {
   readonly name = "email-notify";
@@ -31,14 +29,24 @@ export class EmailNotifyAdapter implements INotifyAdapter {
     await this.send({
       to,
       subject: `[ElevarusOS] Blog workflow started: ${job.request.title}`,
-      body: `A new blog workflow has started.\n\nJob ID: ${job.id}\nTitle: ${job.request.title}\nKeyword: ${job.request.targetKeyword}\n\nYou will receive a separate email when the draft is ready for your review.`,
+      bodyText: [
+        `A new blog workflow has started.`,
+        ``,
+        `Job ID:  ${job.id}`,
+        `Title:   ${job.request.title}`,
+        `Keyword: ${job.request.targetKeyword}`,
+        ``,
+        `You will receive a separate email when the draft is ready for your review.`,
+      ].join("\n"),
     });
   }
 
   async sendApprovalRequest(job: Job): Promise<void> {
     const to = job.request.approver;
     if (!to) {
-      logger.warn("No approver set — skipping approval email", { jobId: job.id });
+      logger.warn("No approver set — skipping approval email", {
+        jobId: job.id,
+      });
       return;
     }
 
@@ -49,32 +57,38 @@ export class EmailNotifyAdapter implements INotifyAdapter {
     await this.send({
       to,
       subject: `[ElevarusOS] Approval requested: ${title}`,
-      body: [
+      bodyText: [
         `A draft is ready for your approval.`,
         ``,
-        `Job ID: ${job.id}`,
-        `Title: ${title}`,
-        `Word count: ${editorial?.wordCount ?? "—"}`,
+        `Job ID:       ${job.id}`,
+        `Title:        ${title}`,
+        `Word count:   ${editorial?.wordCount ?? "—"}`,
         `Edit summary: ${editorial?.editSummary ?? "—"}`,
         ``,
-        `─── Draft ───────────────────────────────────────────────────`,
+        `${"─".repeat(60)}`,
         ``,
         body,
         ``,
-        `─────────────────────────────────────────────────────────────`,
+        `${"─".repeat(60)}`,
         ``,
-        `To approve, reply to this email with "APPROVED" or contact the content ops team.`,
+        `To approve, reply with "APPROVED" or contact the content ops team.`,
       ].join("\n"),
     });
   }
 
   async sendFailure(job: Job, error: string): Promise<void> {
     const to = job.request.approver ?? config.microsoft.notifyFrom;
-    if (!to) return;
+    if (!to || to.includes("yourdomain.com")) return;
     await this.send({
       to,
       subject: `[ElevarusOS] Workflow failed: ${job.request.title}`,
-      body: `The blog workflow for job ${job.id} encountered an error.\n\nError: ${error}\n\nPlease review the job logs and retry.`,
+      bodyText: [
+        `The blog workflow for job ${job.id} encountered an error.`,
+        ``,
+        `Error: ${error}`,
+        ``,
+        `Please review the job logs and retry.`,
+      ].join("\n"),
     });
   }
 
@@ -84,18 +98,22 @@ export class EmailNotifyAdapter implements INotifyAdapter {
     await this.send({
       to,
       subject: `[ElevarusOS] Workflow completed: ${job.request.title}`,
-      body: `The blog workflow for job ${job.id} has completed successfully.\n\nTitle: ${job.request.title}`,
+      bodyText: [
+        `The blog workflow for job ${job.id} has completed successfully.`,
+        ``,
+        `Title: ${job.request.title}`,
+      ].join("\n"),
     });
   }
 
-  // ─── Private helpers ────────────────────────────────────────────────────────
+  // ─── Private helpers ──────────────────────────────────────────────────────
 
   private async send(message: {
     to: string;
     subject: string;
-    body: string;
+    bodyText: string;
   }): Promise<void> {
-    if (!config.microsoft.tenantId || !config.microsoft.notifyFrom) {
+    if (!this.isConfigured()) {
       logger.warn("Email notify adapter is not configured — skipping email", {
         adapter: this.name,
         to: message.to,
@@ -103,35 +121,71 @@ export class EmailNotifyAdapter implements INotifyAdapter {
       return;
     }
 
-    logger.debug("Sending email notification", {
+    logger.debug("Sending notification email", {
       adapter: this.name,
       to: message.to,
       subject: message.subject,
     });
 
-    // TODO: Implement real Graph API sendMail call
-    // const token = await acquireGraphToken();
-    // fetch(`https://graph.microsoft.com/v1.0/users/${config.microsoft.notifyFrom}/sendMail`, {
-    //   method: "POST",
-    //   headers: {
-    //     "Content-Type": "application/json",
-    //     Authorization: `Bearer ${token}`,
-    //   },
-    //   body: JSON.stringify({
-    //     message: {
-    //       subject: message.subject,
-    //       body: { contentType: "Text", content: message.body },
-    //       toRecipients: [{ emailAddress: { address: message.to } }],
-    //     },
-    //     saveToSentItems: true,
-    //   }),
-    // });
+    const { notifyFrom } = config.microsoft;
+    const url = `${GRAPH_BASE}/users/${encodeURIComponent(notifyFrom)}/sendMail`;
 
-    logger.info("Email notification stubbed", {
+    let token: string;
+    try {
+      token = await acquireGraphToken();
+    } catch (err) {
+      logger.error("Failed to acquire Graph token for email send", {
+        error: String(err),
+      });
+      return;
+    }
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          subject: message.subject,
+          body: { contentType: "Text", content: message.bodyText },
+          toRecipients: [{ emailAddress: { address: message.to } }],
+        },
+        saveToSentItems: true,
+      }),
+    });
+
+    if (res.status === 401) {
+      clearGraphTokenCache();
+      logger.error("Graph sendMail returned 401 — token cleared for retry", {
+        adapter: this.name,
+      });
+      return;
+    }
+
+    if (!res.ok) {
+      const text = await res.text();
+      logger.error("Graph sendMail failed", {
+        adapter: this.name,
+        status: res.status,
+        body: text.slice(0, 300),
+      });
+      return;
+    }
+
+    logger.info("Notification email sent", {
       adapter: this.name,
       to: message.to,
       subject: message.subject,
     });
+  }
+
+  private isConfigured(): boolean {
+    const { tenantId, clientId, clientSecret, notifyFrom } = config.microsoft;
+    if (!tenantId || !clientId || !clientSecret || !notifyFrom) return false;
+    if (notifyFrom.includes("yourdomain.com")) return false;
+    return true;
   }
 
   private getStageOutput<T>(job: Job, stageName: string): T | undefined {

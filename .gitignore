@@ -2,3 +2,9 @@ node_modules/
 dist/
 .env
 data/
+
+# Dashboard submodule runtime files (not tracked in ElevarusOS repo)
+dashboard/.env
+dashboard/.data/
+dashboard/.next/
+dashboard/node_modules/
