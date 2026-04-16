@@ -60,11 +60,11 @@ else
   echo "   dashboard/.env: exists"
 fi
 
-# 5. Supabase migrations (optional — only if DATABASE_URL is set in .env)
+# 5. Supabase migrations (optional — only if SUPABASE_ACCESS_TOKEN is set in .env)
 echo ""
 echo "5. Checking Supabase migrations..."
 
-# Source .env to read DATABASE_URL (if present)
+# Source .env to read Supabase vars (if present)
 if [ -f .env ]; then
   set -a
   # shellcheck disable=SC1091
@@ -72,26 +72,26 @@ if [ -f .env ]; then
   set +a
 fi
 
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo -e "   ${YELLOW}DATABASE_URL not set — skipping migrations.${NC}"
-  echo "   To apply later: psql \$DATABASE_URL -f supabase/migrations/20260416000001_initial_schema.sql"
+if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ] || [ -z "${SUPABASE_PROJECT_REF:-}" ]; then
+  echo -e "   ${YELLOW}SUPABASE_ACCESS_TOKEN or SUPABASE_PROJECT_REF not set — skipping migrations.${NC}"
+  echo "   Add them to .env to enable automatic migration on setup."
 else
-  echo "   DATABASE_URL found — applying migrations..."
-  if command -v psql &>/dev/null; then
-    for migration in supabase/migrations/*.sql; do
-      echo "   Applying $migration..."
-      psql "$DATABASE_URL" -f "$migration"
-    done
-    echo "   Migrations: OK"
-  elif command -v supabase &>/dev/null; then
-    supabase db push --db-url "$DATABASE_URL"
-    echo "   Migrations via Supabase CLI: OK"
-  else
-    echo -e "   ${YELLOW}Neither psql nor supabase CLI found — skipping migrations.${NC}"
-    echo "   Install psql:  brew install libpq && brew link --force libpq"
-    echo "   Or Supabase CLI: brew install supabase/tap/supabase"
-    echo "   Then run: psql \$DATABASE_URL -f supabase/migrations/20260416000001_initial_schema.sql"
-  fi
+  API="https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/database/query"
+  echo "   Applying migrations via Supabase Management API..."
+  for migration in supabase/migrations/*.sql; do
+    echo "   Applying $migration..."
+    SQL=$(cat "$migration")
+    RESULT=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API" \
+      -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$(jq -n --arg q "$SQL" '{query: $q}')")
+    if [ "$RESULT" -ge 200 ] && [ "$RESULT" -lt 300 ]; then
+      echo "   $migration: OK (HTTP $RESULT)"
+    else
+      echo -e "   ${YELLOW}$migration: HTTP $RESULT — check Supabase dashboard${NC}"
+    fi
+  done
+  echo "   Migrations: done"
 fi
 
 # Done
