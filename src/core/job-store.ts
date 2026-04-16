@@ -3,15 +3,16 @@ import * as path from "path";
 import { Job } from "../models/job.model";
 import { config } from "../config";
 import { logger } from "./logger";
+import { isSupabaseConfigured } from "./supabase-client";
 
 /**
- * Lightweight job persistence layer.
+ * Job persistence layer.
  *
- * In "memory" mode, jobs are stored in-process only (lost on restart).
- * In "file" mode, each job is written as a JSON file under JOB_STORE_PATH.
- *
- * In a future version, swap this for a real database (Postgres, SQLite, etc.)
- * by implementing the same IJobStore interface.
+ * Three modes controlled by JOB_STORE in .env:
+ *   memory   — in-process Map, lost on restart (default for quick testing)
+ *   file     — one JSON file per job under JOB_STORE_PATH (simple, no deps)
+ *   supabase — Postgres via Supabase (production; requires SUPABASE_URL +
+ *              SUPABASE_SERVICE_KEY and migrations applied)
  */
 
 export interface IJobStore {
@@ -83,6 +84,14 @@ class FileJobStore implements IJobStore {
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
 export function createJobStore(): IJobStore {
+  if (config.orchestrator.jobStore === "supabase") {
+    if (!isSupabaseConfigured()) {
+      throw new Error("JOB_STORE=supabase but SUPABASE_URL / SUPABASE_SERVICE_KEY are not set.");
+    }
+    const { SupabaseJobStore } = require("./supabase-job-store");
+    logger.info("Job store: supabase", { url: config.supabase.url });
+    return new SupabaseJobStore();
+  }
   if (config.orchestrator.jobStore === "file") {
     logger.info("Job store: file", { path: config.orchestrator.jobStorePath });
     return new FileJobStore(config.orchestrator.jobStorePath);

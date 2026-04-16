@@ -60,6 +60,40 @@ else
   echo "   dashboard/.env: exists"
 fi
 
+# 5. Supabase migrations (optional — only if DATABASE_URL is set in .env)
+echo ""
+echo "5. Checking Supabase migrations..."
+
+# Source .env to read DATABASE_URL (if present)
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo -e "   ${YELLOW}DATABASE_URL not set — skipping migrations.${NC}"
+  echo "   To apply later: psql \$DATABASE_URL -f supabase/migrations/20260416000001_initial_schema.sql"
+else
+  echo "   DATABASE_URL found — applying migrations..."
+  if command -v psql &>/dev/null; then
+    for migration in supabase/migrations/*.sql; do
+      echo "   Applying $migration..."
+      psql "$DATABASE_URL" -f "$migration"
+    done
+    echo "   Migrations: OK"
+  elif command -v supabase &>/dev/null; then
+    supabase db push --db-url "$DATABASE_URL"
+    echo "   Migrations via Supabase CLI: OK"
+  else
+    echo -e "   ${YELLOW}Neither psql nor supabase CLI found — skipping migrations.${NC}"
+    echo "   Install psql:  brew install libpq && brew link --force libpq"
+    echo "   Or Supabase CLI: brew install supabase/tap/supabase"
+    echo "   Then run: psql \$DATABASE_URL -f supabase/migrations/20260416000001_initial_schema.sql"
+  fi
+fi
+
 # Done
 echo ""
 echo -e "${GREEN}Setup complete.${NC}"
@@ -70,4 +104,10 @@ echo "  Terminal 2:  npm run dev                    # ElevarusOS daemon + API on
 echo ""
 echo "Test run (blog bot, no daemon):"
 echo "  npm run dev -- --once --bot elevarus-blog"
+echo ""
+echo "Supabase (production job store):"
+echo "  1. Create a project at https://supabase.com"
+echo "  2. Set SUPABASE_URL, SUPABASE_SERVICE_KEY, DATABASE_URL in .env"
+echo "  3. Run: ./setup.sh     (will apply migrations automatically)"
+echo "  4. Set JOB_STORE=supabase in .env"
 echo ""

@@ -43,7 +43,14 @@ export const config = {
     pollIntervalMs: parseInt(optional("POLL_INTERVAL_MS", "60000"), 10),
     maxStageRetries: parseInt(optional("MAX_STAGE_RETRIES", "2"), 10),
     logLevel: optional("LOG_LEVEL", "info") as "debug" | "info" | "warn" | "error",
-    jobStore: optional("JOB_STORE", "memory") as "memory" | "file",
+    jobStore: optional("JOB_STORE", "memory") as "memory" | "file" | "supabase",
     jobStorePath: optional("JOB_STORE_PATH", "./data/jobs"),
+  },
+
+  supabase: {
+    url: optional("SUPABASE_URL", ""),
+    serviceKey: optional("SUPABASE_SERVICE_KEY", ""),
+    /** Postgres connection string — used by setup.sh to run migrations */
+    databaseUrl: optional("DATABASE_URL", ""),
   },
 } as const;

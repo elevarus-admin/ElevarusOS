@@ -33,6 +33,7 @@ import { WorkflowRegistry } from "./core/workflow-registry";
 import { Scheduler } from "./core/scheduler";
 import { ApiServer } from "./api/server";
 import { MissionControlBridge } from "./adapters/bridge/mission-control.bridge";
+import { syncInstancesToSupabase } from "./core/instance-sync";
 
 // Intake adapters
 import { ClickUpIntakeAdapter } from "./adapters/intake/clickup.adapter";
@@ -94,6 +95,9 @@ async function main(): Promise<void> {
 
   const bridge = new MissionControlBridge();
   orchestrator.setBridge(bridge);
+
+  // Sync instance configs to Supabase (no-op if Supabase not configured)
+  await syncInstancesToSupabase();
 
   // ─── API server ───────────────────────────────────────────────────────────
   // GET  /api/health | /api/bots | /api/jobs | /api/schedule
