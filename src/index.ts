@@ -90,7 +90,7 @@ async function main(): Promise<void> {
 
   // ─── Mission Control bridge (dashboard UI) ────────────────────────────────
   // Set MISSION_CONTROL_URL + MISSION_CONTROL_API_KEY in .env to enable.
-  // Start Mission Control:  cd ../mc-dashboard && npm run dev  (port 3000)
+  // Start Mission Control:  cd dashboard && pnpm dev  (port 3000)
 
   const bridge = new MissionControlBridge();
   orchestrator.setBridge(bridge);
