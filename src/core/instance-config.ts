@@ -28,6 +28,18 @@ export interface InstanceNotify {
   slackChannel?: string;
 }
 
+/** Ringba integration config — used by ppc-campaign-report workflow instances. */
+export interface InstanceRingba {
+  /** Ringba campaign name to pull metrics for. */
+  campaignName: string;
+  /** Reporting period: mtd | wtd | ytd | custom (default: mtd) */
+  reportPeriod?: "mtd" | "wtd" | "ytd" | "custom";
+  /** Start date for custom period (YYYY-MM-DD) */
+  startDate?: string;
+  /** End date for custom period (YYYY-MM-DD) */
+  endDate?: string;
+}
+
 /** Optional cron schedule for this instance. */
 export interface InstanceSchedule {
   enabled: boolean;
@@ -62,6 +74,8 @@ export interface InstanceConfig {
   notify: InstanceNotify;
   /** Optional scheduling config */
   schedule: InstanceSchedule;
+  /** Ringba integration config (ppc-campaign-report workflow only) */
+  ringba?: InstanceRingba;
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -84,9 +98,10 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
 
   const { data } = matter(raw);
 
-  const brand = (data.brand as any) ?? {};
-  const notify = (data.notify as any) ?? {};
+  const brand    = (data.brand    as any) ?? {};
+  const notify   = (data.notify   as any) ?? {};
   const schedule = (data.schedule as any) ?? {};
+  const ringba   = (data.ringba   as any) ?? null;
 
   return {
     id: String(data.id ?? instanceId),
@@ -94,20 +109,28 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
     baseWorkflow: String(data.baseWorkflow ?? "blog"),
     enabled: Boolean(data.enabled ?? true),
     brand: {
-      voice: String(brand.voice ?? ""),
+      voice:    String(brand.voice    ?? ""),
       audience: String(brand.audience ?? ""),
-      tone: String(brand.tone ?? ""),
+      tone:     String(brand.tone     ?? ""),
       industry: brand.industry ? String(brand.industry) : undefined,
     },
     notify: {
-      approver: notify.approver ? String(notify.approver) : undefined,
+      approver:     notify.approver     ? String(notify.approver)     : undefined,
       slackChannel: notify.slackChannel ? String(notify.slackChannel) : undefined,
     },
     schedule: {
-      enabled: Boolean(schedule.enabled ?? false),
-      cron: schedule.cron ? String(schedule.cron) : undefined,
+      enabled:     Boolean(schedule.enabled ?? false),
+      cron:        schedule.cron        ? String(schedule.cron)        : undefined,
       description: schedule.description ? String(schedule.description) : undefined,
     },
+    ringba: ringba?.campaignName
+      ? {
+          campaignName: String(ringba.campaignName),
+          reportPeriod: (ringba.reportPeriod ?? "mtd") as InstanceRingba["reportPeriod"],
+          startDate:    ringba.startDate ? String(ringba.startDate) : undefined,
+          endDate:      ringba.endDate   ? String(ringba.endDate)   : undefined,
+        }
+      : undefined,
   };
 }
 

@@ -61,13 +61,11 @@ export interface Job {
 
   /** Publish handoff record (populated by the publish_placeholder stage) */
   publishRecord?: PublishRecord;
-
-  /** Mission Control task ID — set by the bridge after task creation */
-  mcTaskId?: number;
 }
 
 export interface ApprovalState {
-  required: true;
+  /** Whether human approval is needed before the publish stages run. */
+  required: boolean;
   approved: boolean;
   approvedBy?: string;
   approvedAt?: string;

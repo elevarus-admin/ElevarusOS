@@ -1,7 +1,7 @@
 ---
 id: hvac-reporting
 name: HVAC Campaign Report Bot
-baseWorkflow: reporting
+baseWorkflow: ppc-campaign-report
 enabled: true
 
 brand:

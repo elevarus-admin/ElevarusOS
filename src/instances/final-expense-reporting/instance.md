@@ -1,7 +1,7 @@
 ---
 id: final-expense-reporting
 name: Final Expense Campaign Report Bot
-baseWorkflow: reporting
+baseWorkflow: ppc-campaign-report
 enabled: true
 
 brand:
@@ -12,7 +12,11 @@ brand:
 
 notify:
   approver: ~
-  slackChannel: ~                    # TODO: set to Final Expense Slack channel ID
+  slackChannel: cli-final-expense    # posts weekly report to #cli-final-expense
+
+ringba:
+  campaignName: O&O_SOMQ_FINAL_EXPENSE
+  reportPeriod: mtd                  # mtd | wtd | custom
 
 schedule:
   enabled: false

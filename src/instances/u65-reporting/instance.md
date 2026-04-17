@@ -1,7 +1,7 @@
 ---
 id: u65-reporting
 name: U65 Campaign Report Bot
-baseWorkflow: reporting
+baseWorkflow: ppc-campaign-report
 enabled: true
 
 brand:

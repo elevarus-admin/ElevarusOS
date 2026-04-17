@@ -38,7 +38,7 @@ export interface BlogRequest {
   workflowType?: string;
 }
 
-export type SourceChannel = "clickup" | "email" | "manual";
+export type SourceChannel = "clickup" | "email" | "manual" | "mc_task";
 
 export interface RawSource {
   channel: SourceChannel;
