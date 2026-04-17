@@ -45,6 +45,12 @@ import { listInstanceIds, loadInstanceConfig } from "../core/instance-config";
 import { logger } from "../core/logger";
 import { BlogRequest } from "../models/blog-request.model";
 import { getCampaignRevenue, getDateRange } from "../integrations/ringba";
+import {
+  verifySlackSignature,
+  handleSlackEvent,
+  SlackEventEnvelope,
+} from "../core/slack-events";
+import { config } from "../config";
 
 const INSTANCES_DIR = path.resolve(__dirname, "../instances");
 
@@ -63,7 +69,8 @@ export class ApiServer {
 
   constructor(private readonly options: ApiServerOptions) {
     // Raw body needed for webhook HMAC verification — must come before json()
-    this.app.use("/api/webhooks/mc", express.raw({ type: "application/json" }));
+    this.app.use("/api/webhooks/mc",    express.raw({ type: "application/json" }));
+    this.app.use("/api/webhooks/slack", express.raw({ type: "application/json" }));
     this.app.use(express.json());
     this.app.use(this.authMiddleware.bind(this));
     this.registerRoutes();
@@ -78,8 +85,9 @@ export class ApiServer {
   // ─── Auth middleware ────────────────────────────────────────────────────────
 
   private authMiddleware(req: Request, res: Response, next: NextFunction): void {
-    // Webhook endpoint is authenticated via HMAC — skip API key check
-    if (req.path.startsWith("/api/webhooks/mc")) { next(); return; }
+    // Webhook endpoints authenticate via HMAC — skip API key check
+    if (req.path.startsWith("/api/webhooks/mc"))    { next(); return; }
+    if (req.path.startsWith("/api/webhooks/slack")) { next(); return; }
 
     const secret = process.env.API_SECRET;
     if (!secret) { next(); return; }
@@ -130,6 +138,9 @@ export class ApiServer {
 
     // ── Mission Control webhook receiver ──────────────────────────────────────
     r.post("/api/webhooks/mc", this.handleAsync(this.receiveMCWebhook.bind(this)));
+
+    // ── Slack Events API receiver (Q&A bot) ───────────────────────────────────
+    r.post("/api/webhooks/slack", this.handleAsync(this.receiveSlackWebhook.bind(this)));
 
     // ── 404 catch-all ────────────────────────────────────────────────────────
     r.use((_req, res) => {
@@ -639,6 +650,73 @@ export class ApiServer {
 
     // Acknowledge receipt immediately — MC expects a 2xx within 10s
     res.status(200).json({ received: true, event });
+  }
+
+  // ─── Slack Events API receiver ────────────────────────────────────────────────
+
+  /**
+   * POST /api/webhooks/slack
+   *
+   * Receives signed events from the Slack Events API. In Phase 1, handles
+   * app_mention and message.im events and posts a static echo reply. Later
+   * phases route to the QA workflow (see docs/qa-bot.md).
+   *
+   * Security: v0 HMAC-SHA256 via x-slack-signature + x-slack-request-timestamp.
+   * Configure SLACK_SIGNING_SECRET to match the Slack app.
+   *
+   * Slack expects a 2xx within 3s. We verify, parse, ack, then dispatch the
+   * event asynchronously so slow replies don't trigger Slack retries.
+   */
+  private async receiveSlackWebhook(req: Request, res: Response): Promise<void> {
+    const signingSecret = config.slack.signingSecret;
+    if (!signingSecret) {
+      res.status(503).json({ error: "SLACK_SIGNING_SECRET not configured" });
+      return;
+    }
+
+    const rawBody   = req.body instanceof Buffer ? req.body : Buffer.from("");
+    const timestamp = req.headers["x-slack-request-timestamp"] as string | undefined;
+    const signature = req.headers["x-slack-signature"]         as string | undefined;
+
+    const verified = verifySlackSignature(rawBody, timestamp, signature, signingSecret);
+    if (!verified.ok) {
+      logger.warn("Slack webhook: signature verification failed", { error: verified.error });
+      res.status(401).json({ error: verified.error ?? "Invalid signature" });
+      return;
+    }
+
+    let envelope: SlackEventEnvelope;
+    try {
+      envelope = JSON.parse(rawBody.toString("utf8")) as SlackEventEnvelope;
+    } catch {
+      res.status(400).json({ error: "Invalid JSON payload" });
+      return;
+    }
+
+    // URL verification is a synchronous challenge-response — return the
+    // challenge value in the body before doing anything else.
+    if (envelope.type === "url_verification") {
+      const response = await handleSlackEvent(envelope, {
+        registry: this.options.registry,
+        jobStore: this.options.jobStore,
+      });
+      res.status(200).json(response);
+      return;
+    }
+
+    // For real events, ack immediately so Slack doesn't retry, then dispatch.
+    res.status(200).json({ ok: true });
+
+    handleSlackEvent(envelope, {
+        registry: this.options.registry,
+        jobStore: this.options.jobStore,
+      }).catch((err) => {
+      logger.error("Slack event handler failed", {
+        eventId:   envelope.event_id,
+        eventType: envelope.event?.type,
+        error:     String(err),
+      });
+    });
   }
 
   // ─── Data APIs ────────────────────────────────────────────────────────────────

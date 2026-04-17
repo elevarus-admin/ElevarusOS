@@ -57,6 +57,8 @@ import { Scheduler }       from "./core/scheduler";
 import { MCWorker }        from "./core/mc-worker";
 import { MCClient }        from "./core/mc-client";
 import { ApiServer }       from "./api/server";
+import { LeadsProsperSyncWorker } from "./integrations/leadsprosper";
+import { RingbaSyncWorker }       from "./integrations/ringba";
 
 // Intake adapters
 import { ClickUpIntakeAdapter } from "./adapters/intake/clickup.adapter";
@@ -218,12 +220,25 @@ async function main(): Promise<void> {
   });
   scheduler.start();
 
+  // ── Data sync workers ─────────────────────────────────────────────────────
+  // Keep Supabase in sync with external platforms. Each worker runs on its own
+  // cron, no-ops if its API key / Supabase is missing. Workflows read the
+  // resulting Supabase rows via integration repositories — never the API
+  // directly.
+
+  const lpSync     = new LeadsProsperSyncWorker();
+  const ringbaSync = new RingbaSyncWorker();
+  lpSync.start();
+  ringbaSync.start();
+
   // ── Graceful shutdown ──────────────────────────────────────────────────────
 
   const shutdown = (): void => {
     logger.info("Shutting down...");
     mcWorker.stop();
     scheduler.stop();
+    lpSync.stop();
+    ringbaSync.stop();
     process.exit(0);
   };
 

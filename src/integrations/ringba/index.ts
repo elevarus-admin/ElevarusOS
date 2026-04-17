@@ -1,14 +1,18 @@
 /**
- * Ringba Integration
+ * Ringba Integration — Supabase-backed pattern (see docs/data-platform.md).
  *
- * Shared library for all ElevarusOS agents that pull Ringba data.
- * Used by ppc-campaign-report workflow and any future workflows needing call data.
+ * Workflows should read via `getCampaignRevenue` (which now queries the
+ * RingbaRepository with a live-API fallback) or via RingbaRepository directly.
+ * RingbaHttpClient is still exported for the sync worker and edge cases,
+ * but normal workflow code should not call it.
  *
  * Usage:
- *   import { getCampaignRevenue, getMTDRevenue, getWTDRevenue } from '../../integrations/ringba';
- *   import { RingbaHttpClient } from '../../integrations/ringba';
+ *   import { getCampaignRevenue, getMTDRevenue } from '../../integrations/ringba';
+ *   import { RingbaRepository }                   from '../../integrations/ringba';
  */
-export { RingbaHttpClient } from "./client";
+export { RingbaHttpClient }   from "./client";
+export { RingbaRepository }   from "./repository";
+export { RingbaSyncWorker }   from "./sync";
 export {
   getCampaignRevenue,
   getMTDRevenue,

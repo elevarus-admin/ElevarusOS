@@ -1,6 +1,8 @@
 # ElevarusOS — common operations
 # Usage: make <target>
 
+API_PORT ?= 3001
+
 .PHONY: help start dev dashboard setup once once-blog once-report logs typecheck build clean
 
 # ── Default ───────────────────────────────────────────────────────────────────
@@ -10,7 +12,7 @@ help:
 	@echo "ElevarusOS"
 	@echo "=========="
 	@echo ""
-	@echo "  make start          Start everything (ElevarusOS + Dashboard)"
+	@echo "  make start          Start everything (ElevarusOS + Dashboard + ngrok)"
 	@echo "  make dev            Start ElevarusOS only (with hot-reload)"
 	@echo "  make dashboard      Start Mission Control dashboard only"
 	@echo ""
@@ -27,6 +29,7 @@ help:
 	@echo "  Dashboard     http://localhost:3000"
 	@echo "  REST API      http://localhost:3001/api/health"
 	@echo "  API docs      http://localhost:3000/docs"
+	@echo "  Ngrok inspector http://localhost:4040   # shows the public https:// URL"
 	@echo ""
 
 # ── Run ───────────────────────────────────────────────────────────────────────

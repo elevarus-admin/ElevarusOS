@@ -20,7 +20,6 @@ interface JobRow {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
-  mc_task_id: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +89,6 @@ function toRow(job: Job): Omit<JobRow, never> {
     created_at:     job.createdAt,
     updated_at:     job.updatedAt,
     completed_at:   job.completedAt ?? null,
-    mc_task_id:     job.mcTaskId ?? null,
   };
 }
 
@@ -107,6 +105,5 @@ function fromRow(row: JobRow): Job {
     createdAt:     row.created_at,
     updatedAt:     row.updated_at,
     completedAt:   row.completed_at ?? undefined,
-    mcTaskId:      row.mc_task_id ?? undefined,
   };
 }

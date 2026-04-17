@@ -1,12 +1,16 @@
 # ElevarusOS Integration Reference
 
-This document covers the four external integrations used by ElevarusOS agents: Ringba (call tracking and revenue), Meta Ads (ad spend), Slack (notifications and report delivery), and Mission Control (task orchestration and agent management).
+This document covers the external integrations used by ElevarusOS agents: Ringba (call tracking and revenue), LeadsProsper (lead routing and attribution), Meta Ads (ad spend), Slack (notifications and report delivery), and Mission Control (task orchestration and agent management).
+
+**Integration patterns.** All lead/call/revenue sources now use the **Supabase-backed pattern**: a sync worker pulls API data into Supabase on a cron; workflows read from a repository class. Meta Ads remains on the legacy live-API pattern (ad spend is low-volume enough that caching isn't necessary yet). See [data-platform.md](./data-platform.md) for the pattern spec.
 
 ---
 
 ## Ringba
 
 **Source:** `src/integrations/ringba/`
+
+Supabase-backed. Workflows read via `getCampaignRevenue()` (now repository-first with live-API fallback) or `RingbaRepository` directly. The sync worker is the only code that calls Ringba's API in normal operation.
 
 Pulls inbound call logs and revenue metrics from the Ringba Pay-Per-Call platform. Used by reporting agents (e.g. `final-expense-reporting`, `u65-reporting`) to produce campaign performance summaries.
 
@@ -120,6 +124,158 @@ ringba:
 ```
 
 The data-collection workflow stage reads this config and calls `getCampaignRevenue` with the appropriate date range. The `GET /api/data/ringba/revenue` endpoint also accepts `?instanceId=` to read from instance config.
+
+### Pieces
+
+| File | Role |
+|------|------|
+| `client.ts`     | Thin HTTP wrapper. Auth, offset pagination, Ringba quirks. **Called by the sync worker only** in normal operation. |
+| `repository.ts` | Supabase read/write. Reproduces `getCampaignRevenue` from `ringba_calls.routing_attempts` — same aggregation semantics, same numbers. |
+| `sync.ts`       | `RingbaSyncWorker` — cron-driven pull into `ringba_calls` / `ringba_campaigns`. |
+| `reports.ts`    | Public `getCampaignRevenue(opts)`. Supabase-first; falls back to live API if the requested range is outside sync coverage. Pass `liveOnly: true` to force the legacy path. |
+| `types.ts`      | API response types and report types. |
+
+### Supabase tables
+
+| Table | Rows | Notes |
+|-------|------|-------|
+| `ringba_campaigns`  | one per campaign    | `id` PK, `enabled`, full object in `raw` |
+| `ringba_calls`      | one per inbound call | PK = `inbound_call_id`; winning record promoted; all routing attempts in `routing_attempts` JSONB; `phone_normalized` generated |
+| `ringba_sync_state` | one per sync stream  | `high_water_mark` = latest synced `call_dt`, `low_water_mark` = earliest — together they define the Supabase-authoritative range |
+
+Migration file: [supabase/migrations/20260417000002_ringba.sql](../supabase/migrations/20260417000002_ringba.sql).
+
+### Read-path behavior — when does `getCampaignRevenue` use Supabase vs live?
+
+```
+1. If liveOnly=true             → live API
+2. If Supabase not configured   → live API
+3. If sync_state coverage is complete for [startDate, endDate]  → Supabase
+4. Otherwise                    → live API
+```
+
+"Coverage complete" = `low_water_mark <= startDate` AND `high_water_mark >= endDate` for the `calls:global` sync key. This is the safe default: the repo is only trusted for ranges we've actually synced.
+
+### Aggregation semantics preserved
+
+The Supabase path unnests the `routing_attempts` JSONB and applies the exact same filters as the live aggregation:
+
+- `totalCalls` = routing attempts with `callLengthInSeconds >= minCallDurationSeconds`
+- `paidCalls` = attempts with `hasPayout && !isDuplicate && callLengthInSeconds >= minCallDurationSeconds`
+- `totalRevenue` = sum of `conversionAmount` across all attempts (duplicates are $0)
+- `totalPayout` = sum of `payoutAmount` across all attempts
+
+Numbers match the Ringba UI byte-for-byte when `minCallDurationSeconds=0`.
+
+### Sync worker
+
+`RingbaSyncWorker` runs standalone (not via instance Scheduler). Default cron: every 15 min. Overlap: 30 min.
+
+**Tick behavior:**
+
+1. Refresh campaign list into `ringba_campaigns`
+2. Read `high_water_mark` from `ringba_sync_state` (or cold-start 3 days back)
+3. Pull `/callLogs` for `(high_water_mark − 30 min) → now` (offset-paginated, 20/page)
+4. Group by `inboundCallId`, pick winning record, preserve all attempts in JSONB
+5. Upsert into `ringba_calls`
+6. Advance `high_water_mark`; leave `low_water_mark` alone (backfill script manages it)
+
+**Winning-record selection.** When a call has multiple routing attempts, the repository and sync worker pick one as "authoritative" for the top-level columns. Ordering: `!isDuplicate` > `hasPayout` > `hasConverted` > `hasConnected`. The full set of attempts is always preserved in `routing_attempts`.
+
+### Historical backfill
+
+```bash
+npm run backfill:ringba                # walk back until 6 empty months
+npm run backfill:ringba -- --months 12 # last 12 months only
+npm run backfill:ringba -- --from 2024-01-01 --to 2026-04-17
+```
+
+Backfill advances `low_water_mark` as it goes. Once backfill completes, `getCampaignRevenue` will use Supabase for any range inside `[low_water_mark, high_water_mark]`.
+
+---
+
+## LeadsProsper
+
+**Source:** `src/integrations/leadsprosper/`
+
+LeadsProsper (LP) is where lead routing is configured. Every lead that flows through Elevarus's platforms passes through LP, which decides which buyer receives it and at what price. LP also enriches Ringba calls with attribution (UTM, sub-IDs, supplier) that flows through at dial time.
+
+This is the first integration built on the Supabase-backed pattern: workflows read from `lp_leads` / `lp_campaigns`, and a sync worker is the only code that calls the LP API. See [data-platform.md](./data-platform.md) for the pattern.
+
+### Configuration
+
+| Env var | Description |
+|---------|-------------|
+| `LEADSPROSPER_API_KEY` | Developer API Key from the LP dashboard. Single header value used as `Authorization: Bearer {key}` |
+
+The `LeadsProsperClient` checks for the key at construction time. If absent, `client.enabled` is `false` and all methods return `[]` / `null` without making any network calls. The sync worker no-ops cleanly in that state.
+
+### Pieces
+
+| File | Role |
+|------|------|
+| `client.ts`     | Thin HTTP wrapper. Auth, pagination (`search_after` cursor), nothing else. Workflows should not import this. |
+| `repository.ts` | Supabase read/write. **This is the public interface for workflows and reconciliation code.** |
+| `sync.ts`       | `LeadsProsperSyncWorker` — cron-driven pull from LP into `lp_leads` / `lp_campaigns`. |
+| `types.ts`      | API response types and Supabase row types. |
+
+### Supabase tables
+
+| Table | Rows | Notes |
+|-------|------|-------|
+| `lp_campaigns`   | one per LP campaign | full campaign JSON in `raw`, name promoted for lookups |
+| `lp_leads`       | one per lead        | phone promoted + `phone_normalized` (digits-only generated column) is the reconciliation join key |
+| `lp_sync_state`  | one per sync stream | checkpoint: `high_water_mark` = latest `lead_date` we've seen |
+
+Migration file: [supabase/migrations/20260417000001_leadsprosper.sql](../supabase/migrations/20260417000001_leadsprosper.sql).
+
+### Reading data — repository API
+
+```typescript
+import { LeadsProsperRepository } from "../../integrations/leadsprosper";
+
+const repo = new LeadsProsperRepository();
+
+// Time-range query
+const leads = await repo.getLeadsByDateRange({
+  startDate:  "2026-04-01T00:00:00Z",
+  endDate:    "2026-04-17T23:59:59Z",
+  campaignId: 23880,          // optional
+  status:     "ACCEPTED",     // optional
+});
+
+// Reconciliation — find LP lead(s) for a phone number in a Ringba call window
+const matches = await repo.findLeadsByPhone({
+  phone:     "+1 (410) 309-7989",   // any format; normalized internally
+  startDate: "2026-04-17T00:00:00Z",
+  endDate:   "2026-04-17T23:59:59Z",
+});
+```
+
+The repository's methods all safely return `[]` when Supabase is not configured — so consuming stages can call it unconditionally.
+
+### Sync worker
+
+`LeadsProsperSyncWorker` runs on a standalone cron (default: every 15 min). It does not use the instance Scheduler, because sync is a platform-level concern, not an instance-level one.
+
+**Tick behavior:**
+
+1. Refresh campaign list (`/campaigns`) — cheap, runs every tick
+2. Read `lp_sync_state.high_water_mark` (or fall back to now − 3 days on cold start)
+3. Pull all leads from `(high_water_mark − 30 min overlap)` to `now`, across every campaign
+4. Upsert into `lp_leads` keyed by LP lead ID (idempotent)
+5. Advance `high_water_mark` to the latest `lead_date` seen
+6. On error, leave `high_water_mark` unchanged and record `last_error` — next tick retries
+
+The 30-minute overlap is intentional: LP mutates lead records post-hoc when buyers accept/reject after the initial POST. Re-pulling the recent window on every tick captures those revisions.
+
+**Runs on boot.** The worker fires one sync immediately at `start()` so data is fresh without waiting for the next cron tick.
+
+### Reconciliation model
+
+Phone number is the universal join key across LeadsProsper, Ringba, and disposition reports. `lp_leads.phone_normalized` is a `GENERATED ALWAYS AS ... STORED` column containing digits-only — indexed and ready for `JOIN ON ringba_calls.inbound_phone_normalized = lp_leads.phone_normalized` once Ringba is migrated to this pattern.
+
+Because phone numbers are fragile (recycled, shared devices), reconciliation queries must always include a time window (typically ±48 h around the Ringba `callDt`).
 
 ---
 

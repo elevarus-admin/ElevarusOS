@@ -37,6 +37,8 @@ export const config = {
   slack: {
     botToken: optional("SLACK_BOT_TOKEN", ""),
     notifyChannel: optional("SLACK_NOTIFY_CHANNEL", ""),
+    signingSecret: optional("SLACK_SIGNING_SECRET", ""),
+    appId: optional("SLACK_APP_ID", ""),
   },
 
   orchestrator: {

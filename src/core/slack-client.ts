@@ -12,6 +12,11 @@ export interface SlackPostOptions {
   text:    string;         // plain-text fallback (required for notifications)
   blocks?: SlackBlock[];   // rich Block Kit layout (optional)
   threadTs?: string;       // reply into an existing thread
+  /**
+   * When true alongside threadTs, the threaded reply also appears at the
+   * channel's top level ("Also send to channel"). Slack API: reply_broadcast.
+   */
+  replyBroadcast?: boolean;
 }
 
 /**
@@ -42,6 +47,7 @@ export async function postToSlack(opts: SlackPostOptions): Promise<string | unde
   };
   if (opts.blocks)   body.blocks    = opts.blocks;
   if (opts.threadTs) body.thread_ts = opts.threadTs;
+  if (opts.threadTs && opts.replyBroadcast) body.reply_broadcast = true;
 
   try {
     const res = await fetch(SLACK_API, {

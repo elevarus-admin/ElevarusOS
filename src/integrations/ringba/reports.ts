@@ -1,5 +1,6 @@
 import { logger } from "../../core/logger";
 import { RingbaHttpClient } from "./client";
+import { RingbaRepository } from "./repository";
 import type { RingbaRevenueReport } from "./types";
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -86,14 +87,9 @@ export async function getCampaignRevenue(opts: {
    *  Default: 0 (all records count — correct for MTD/historical).
    *  Set to 30 for "today" to drop sub-threshold routing failures. */
   minCallDurationSeconds?: number;
+  /** Force-read from live API, skipping the Supabase repository. Default: false. */
+  liveOnly?: boolean;
 }): Promise<RingbaRevenueReport | null> {
-  const client = new RingbaHttpClient();
-
-  if (!client.enabled) {
-    logger.warn("ringba/reports: client not configured — skipping revenue pull");
-    return null;
-  }
-
   const minDuration = opts.minCallDurationSeconds ?? 0;
 
   logger.info("ringba/reports: fetching campaign revenue", {
@@ -101,7 +97,53 @@ export async function getCampaignRevenue(opts: {
     startDate:    opts.startDate,
     endDate:      opts.endDate,
     minDuration,
+    source:       opts.liveOnly ? "live-only" : "auto (supabase→live)",
   });
+
+  // ── Supabase path ───────────────────────────────────────────────────────
+  // Prefer the Supabase repository when its sync has coverage for the
+  // requested date range. This avoids hammering the Ringba API and returns
+  // byte-for-byte the same numbers (same aggregation logic, same fields).
+  if (!opts.liveOnly) {
+    const repo = new RingbaRepository();
+    if (repo.enabled) {
+      const covered = await repo.hasCoverage("calls:global", opts.startDate, opts.endDate);
+      if (covered) {
+        // Resolve campaign ID from Supabase so the repo can use the
+        // campaign_id index instead of unnesting every campaign.
+        const campaignId = await resolveCampaignIdFromRepo(opts.campaignName);
+        const report = await repo.getRevenueReport({
+          campaignId,
+          campaignName:           opts.campaignName,
+          startDate:              opts.startDate,
+          endDate:                opts.endDate,
+          minCallDurationSeconds: minDuration,
+        });
+        if (report) {
+          logger.info("ringba/reports: revenue report ready (supabase)", {
+            campaign:     report.campaignName,
+            totalCalls:   report.totalCalls,
+            paidCalls:    report.paidCalls,
+            totalRevenue: `$${report.totalRevenue.toFixed(2)}`,
+          });
+          return report;
+        }
+      } else {
+        logger.info("ringba/reports: Supabase has no coverage for requested range — falling back to live API", {
+          startDate: opts.startDate,
+          endDate:   opts.endDate,
+        });
+      }
+    }
+  }
+
+  // ── Live-API fallback ───────────────────────────────────────────────────
+  const client = new RingbaHttpClient();
+
+  if (!client.enabled) {
+    logger.warn("ringba/reports: client not configured — skipping revenue pull");
+    return null;
+  }
 
   // Resolve campaign ID for cleaner client-side filtering
   const campaign = await client.findCampaignByName(opts.campaignName);
@@ -147,7 +189,7 @@ export async function getCampaignRevenue(opts: {
     calls,
   };
 
-  logger.info("ringba/reports: revenue report ready", {
+  logger.info("ringba/reports: revenue report ready (live)", {
     campaign:     report.campaignName,
     totalCalls:   report.totalCalls,
     paidCalls:    report.paidCalls,
@@ -155,6 +197,23 @@ export async function getCampaignRevenue(opts: {
   });
 
   return report;
+}
+
+// ─── Campaign ID resolution ──────────────────────────────────────────────────
+
+/** Lookup a campaign ID by name from the ringba_campaigns table. */
+async function resolveCampaignIdFromRepo(campaignName: string): Promise<string | undefined> {
+  try {
+    const { getSupabaseClient } = await import("../../core/supabase-client");
+    const { data } = await getSupabaseClient()
+      .from("ringba_campaigns")
+      .select("id")
+      .ilike("name", campaignName)
+      .maybeSingle();
+    return (data as { id: string } | null)?.id;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

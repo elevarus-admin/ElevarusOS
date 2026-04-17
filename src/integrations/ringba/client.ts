@@ -139,37 +139,74 @@ export class RingbaHttpClient {
   }
 
   async get(path: string): Promise<any | null> {
-    if (!this.enabled) return null;
-    try {
-      const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers });
-      if (!res.ok) {
-        logger.warn("RingbaHttpClient: GET failed", { path, status: res.status });
-        return null;
-      }
-      return res.json();
-    } catch (err) {
-      logger.warn("RingbaHttpClient: GET error", { path, error: String(err) });
-      return null;
-    }
+    return this.request("GET", path);
   }
 
   async post(path: string, body: unknown): Promise<any | null> {
+    return this.request("POST", path, body);
+  }
+
+  /**
+   * Shared request helper with 429/5xx retry and exponential backoff.
+   * Used by GET /campaigns and POST /callLogs; the latter is paginated, so
+   * retrying at the request level keeps the outer loop simple.
+   */
+  private async request(method: "GET" | "POST", path: string, body?: unknown): Promise<any | null> {
     if (!this.enabled) return null;
-    try {
-      const res = await fetch(`${this.baseUrl}${path}`, {
-        method:  "POST",
-        headers: this.headers,
-        body:    JSON.stringify(body),
-      });
-      if (!res.ok) {
+
+    const MAX_ATTEMPTS = 6;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const init: RequestInit = { method, headers: this.headers };
+        if (body !== undefined) init.body = JSON.stringify(body);
+
+        const res = await fetch(`${this.baseUrl}${path}`, init);
+        if (res.ok) return res.json();
+
+        const retryable = res.status === 429 || res.status >= 500;
+        if (retryable && attempt < MAX_ATTEMPTS) {
+          const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
+          const backoff = Math.min(32000, 2000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500);
+          const waitMs = Math.max(retryAfter, backoff);
+          logger.warn("RingbaHttpClient: retrying", {
+            method, path, status: res.status, attempt, waitMs,
+          });
+          await sleep(waitMs);
+          continue;
+        }
+
         const text = await res.text().catch(() => "");
-        logger.warn("RingbaHttpClient: POST failed", { path, status: res.status, body: text.slice(0, 300) });
+        logger.warn("RingbaHttpClient: request failed", {
+          method, path, status: res.status, attempt,
+          body: text.slice(0, 300),
+        });
+        return null;
+      } catch (err) {
+        if (attempt < MAX_ATTEMPTS) {
+          const waitMs = Math.min(32000, 2000 * 2 ** (attempt - 1));
+          logger.warn("RingbaHttpClient: network error — retrying", {
+            method, path, attempt, waitMs, error: String(err),
+          });
+          await sleep(waitMs);
+          continue;
+        }
+        logger.warn("RingbaHttpClient: request error (giving up)", { method, path, attempt, error: String(err) });
         return null;
       }
-      return res.json();
-    } catch (err) {
-      logger.warn("RingbaHttpClient: POST error", { path, error: String(err) });
-      return null;
     }
+    return null;
   }
+}
+
+function parseRetryAfter(value: string | null): number {
+  if (!value) return 0;
+  const asSeconds = Number(value);
+  if (Number.isFinite(asSeconds) && asSeconds >= 0) return asSeconds * 1000;
+  const asDate = Date.parse(value);
+  if (Number.isFinite(asDate)) return Math.max(0, asDate - Date.now());
+  return 0;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
