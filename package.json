@@ -7,13 +7,16 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "dev:watch": "ts-node-dev --respawn src/index.ts",
+    "dev:watch": "ts-node-dev --respawn --exit-child src/index.ts",
     "typecheck": "tsc --noEmit",
-    "setup": "npm install && npm run setup:dashboard",
+    "setup": "bash setup.sh",
     "setup:dashboard": "cd dashboard && pnpm install --frozen-lockfile 2>/dev/null || npm install --legacy-peer-deps",
-    "dashboard:dev": "cd dashboard && pnpm dev 2>/dev/null || npm run dev",
-    "dashboard:build": "cd dashboard && pnpm build 2>/dev/null || npm run build",
-    "start:all": "concurrently --names \"OS,Dashboard\" --prefix-colors \"cyan,magenta\" \"npm run dev:watch\" \"npm run dashboard:dev\""
+    "dashboard:dev": "cd dashboard && pnpm dev",
+    "dashboard:build": "cd dashboard && pnpm build",
+    "start:all": "concurrently --kill-others-on-fail --names \"ElevarusOS,Dashboard\" --prefix-colors \"cyan,magenta\" \"npm run dev:watch\" \"npm run dashboard:dev\"",
+    "once": "ts-node src/index.ts --once",
+    "once:blog": "ts-node src/index.ts --once --bot elevarus-blog",
+    "once:report": "ts-node src/index.ts --once --bot u65-reporting"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

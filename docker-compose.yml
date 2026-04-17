@@ -1,0 +1,38 @@
+services:
+
+  # ── Mission Control Dashboard (port 3000) ─────────────────────────────────
+  dashboard:
+    build: ./dashboard
+    container_name: elevarus-dashboard
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./dashboard/.env
+    environment:
+      - NEXT_PUBLIC_GATEWAY_OPTIONAL=true
+    volumes:
+      - dashboard-data:/app/.data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── ElevarusOS Orchestrator (port 3001) ───────────────────────────────────
+  elevarus:
+    build: .
+    container_name: elevarus-os
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    environment:
+      - MISSION_CONTROL_URL=http://dashboard:3000
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  dashboard-data:
