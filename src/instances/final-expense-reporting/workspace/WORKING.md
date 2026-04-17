@@ -1,65 +1,66 @@
 # Current Report Run
 
-**Last updated:** 2026-04-17T15:23:49.570Z
+**Last updated:** 2026-04-17T19:18:46.624Z
 **Instance:** final-expense-reporting
 
 ## Today — 2026-04-17
 | Metric | Value |
 |--------|-------|
-| Total Calls | 3 |
-| Billable Calls | 3 (100.0%) |
-| Revenue | $138.00 |
-| Meta Spend | $134.52 |
-| Profit | $3.48 |
-| ROI | +2.6% |
+| Total Calls | 10 |
+| Billable Calls | 7 (70.0%) |
+| Revenue | $228.00 |
+| Meta Spend | $606.36 |
+| Profit | $-378.36 |
+| ROI | -62.4% |
 
 ## Month to Date — 2026-04-01 → 2026-04-17
 | Metric | Value |
 |--------|-------|
-| Total Calls | 189 |
-| Billable Calls | 66 (34.9%) |
-| Revenue | $2,889.30 |
-| Avg Payout | $43.78 |
-| Meta Spend | $4,373.68 |
-| Impressions | 109,042 |
-| Clicks | 3,434 |
-| CPC | $1.27 |
-| Profit | $-1,484.38 |
-| ROI | -33.9% |
-| Margin | -51.4% |
+| Total Calls | 224 |
+| Billable Calls | 77 (34.4%) |
+| Revenue | $2,980.80 |
+| Avg Payout | $38.71 |
+| Meta Spend | $4,844.58 |
+| Impressions | 117,253 |
+| Clicks | 3,838 |
+| CPC | $1.26 |
+| Profit | $-1,863.78 |
+| ROI | -38.5% |
+| Margin | -62.5% |
 
 ## Raw Data
 ```json
 {
-  "mtdTotalCalls": 189,
-  "mtdPaidCalls": 66,
-  "mtdRevenue": 2889.3,
-  "mtdPayout": 2319.3,
-  "mtdAvgPayout": 43.78,
+  "description": "Run final expense campaign report",
+  "mtdTotalCalls": 224,
+  "mtdPaidCalls": 77,
+  "mtdRevenue": 2980.8,
+  "mtdPayout": 2320.8,
+  "mtdAvgPayout": 38.71,
   "mtdCampaign": "O&O_SOMQ_FINAL_EXPENSE",
   "mtdDateRange": "2026-04-01 → 2026-04-17",
-  "mtdBillableRate": "34.9%",
-  "mtdMetaSpend": 4373.68,
-  "mtdMetaImpressions": 109042,
-  "mtdMetaClicks": 3434,
-  "mtdMetaCPC": 1.27,
-  "mtdMetaCPM": 40.11,
-  "mtdMetaCTR": 3.15,
-  "mtdProfit": -1484.38,
-  "mtdROI": -33.94,
-  "mtdMargin": -51.38,
-  "todayTotalCalls": 3,
-  "todayPaidCalls": 3,
-  "todayRevenue": 138,
-  "todayAvgPayout": 46,
+  "mtdBillableRate": "34.4%",
+  "mtdMetaSpend": 4844.58,
+  "mtdMetaImpressions": 117253,
+  "mtdMetaClicks": 3838,
+  "mtdMetaCPC": 1.26,
+  "mtdMetaCPM": 41.32,
+  "mtdMetaCTR": 3.27,
+  "mtdProfit": -1863.7799999999997,
+  "mtdROI": -38.47,
+  "mtdMargin": -62.53,
+  "todayTotalCalls": 10,
+  "todayPaidCalls": 7,
+  "todayRevenue": 228,
+  "todayAvgPayout": 32.57,
   "todayDate": "2026-04-17",
-  "todayBillableRate": "100.0%",
-  "todayMetaSpend": 134.52,
-  "todayMetaImpressions": 2370,
-  "todayMetaClicks": 165,
-  "todayMetaCPC": 0.82,
-  "todayProfit": 3.4799999999999898,
-  "todayROI": 2.59,
-  "todayMargin": 2.52
+  "todayBillableRate": "70.0%",
+  "todayMetaSpend": 606.36,
+  "todayMetaImpressions": 10595,
+  "todayMetaClicks": 570,
+  "todayMetaCPC": 1.06,
+  "todayProfit": -378.36,
+  "todayROI": -62.4,
+  "todayMargin": -165.95
 }
 ```
