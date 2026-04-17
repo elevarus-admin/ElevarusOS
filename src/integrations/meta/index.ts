@@ -1,13 +1,28 @@
 /**
- * Meta Ads Integration — COMING SOON
+ * Meta Ads Integration
  *
- * Will provide:
- *   getAdSpend(adAccountId, startDate, endDate)  — MTD/WTD spend by campaign
- *   getCampaignInsights(campaignId, dateRange)    — impressions, clicks, CPL
+ * Pulls ad spend from the Meta Ads Graph API for P&L reporting.
+ * The ad account ID is the per-agent identifier — configured in instance.md.
  *
- * Env vars (to be added):
- *   META_ACCESS_TOKEN  — System User token from Meta Business Manager
- *   META_AD_ACCOUNT_ID — act_XXXXXXXX from Meta Ads Manager
+ * Usage:
+ *   import { getAdAccountSpend } from '../../../integrations/meta';
+ *
+ *   const report = await getAdAccountSpend({
+ *     adAccountId: '999576488367816',
+ *     startDate:   '2026-04-01',
+ *     endDate:     '2026-04-17',
+ *   });
+ *
+ * Env vars:
+ *   META_ACCESS_TOKEN — System User token from Meta Business Manager.
+ *                       One token covers all ad accounts the System User
+ *                       has been granted access to.
  */
 
-export {};  // placeholder — Meta integration not yet implemented
+export { getAdAccountSpend }   from "./reports";
+export { MetaAdsClient }       from "./client";
+export type {
+  MetaSpendReport,
+  MetaSpendOptions,
+  MetaInsightRecord,
+}                              from "./types";

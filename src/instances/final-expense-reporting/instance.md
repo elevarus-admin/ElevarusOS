@@ -18,6 +18,10 @@ ringba:
   campaignName: O&O_SOMQ_FINAL_EXPENSE
   reportPeriod: mtd                  # mtd | wtd | custom
 
+meta:
+  adAccountId: "999576488367816"     # Final Expense Meta ad account
+  campaignIds: []                    # empty = entire account spend
+
 schedule:
   enabled: false
   cron: "0 8 * * 1"                 # every Monday at 8am UTC

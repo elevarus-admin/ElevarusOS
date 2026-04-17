@@ -28,6 +28,23 @@ export interface InstanceNotify {
   slackChannel?: string;
 }
 
+/**
+ * Meta Ads integration config — used by reporting workflow instances.
+ * The ad account ID is the per-agent identifier; different agents can point to
+ * different ad accounts. A single META_ACCESS_TOKEN env var covers all of them
+ * as long as the System User has been granted access to each account.
+ */
+export interface InstanceMeta {
+  /** Numeric ad account ID (without act_ prefix). e.g. "999576488367816" */
+  adAccountId: string;
+  /**
+   * Optional campaign ID filter.
+   * When empty (default), total account-level spend is used.
+   * When provided, spend is filtered to only these campaigns.
+   */
+  campaignIds?: string[];
+}
+
 /** Ringba integration config — used by ppc-campaign-report workflow instances. */
 export interface InstanceRingba {
   /** Ringba campaign name to pull metrics for. */
@@ -74,8 +91,10 @@ export interface InstanceConfig {
   notify: InstanceNotify;
   /** Optional scheduling config */
   schedule: InstanceSchedule;
-  /** Ringba integration config (ppc-campaign-report workflow only) */
+  /** Ringba integration config (reporting workflow instances) */
   ringba?: InstanceRingba;
+  /** Meta Ads integration config (reporting workflow instances) */
+  meta?: InstanceMeta;
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -102,6 +121,7 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
   const notify   = (data.notify   as any) ?? {};
   const schedule = (data.schedule as any) ?? {};
   const ringba   = (data.ringba   as any) ?? null;
+  const meta     = (data.meta     as any) ?? null;
 
   return {
     id: String(data.id ?? instanceId),
@@ -129,6 +149,14 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
           reportPeriod: (ringba.reportPeriod ?? "mtd") as InstanceRingba["reportPeriod"],
           startDate:    ringba.startDate ? String(ringba.startDate) : undefined,
           endDate:      ringba.endDate   ? String(ringba.endDate)   : undefined,
+        }
+      : undefined,
+    meta: meta?.adAccountId
+      ? {
+          adAccountId: String(meta.adAccountId),
+          campaignIds: Array.isArray(meta.campaignIds)
+            ? meta.campaignIds.map(String).filter(Boolean)
+            : undefined,
         }
       : undefined,
   };
