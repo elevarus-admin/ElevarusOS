@@ -10,34 +10,41 @@ import type { MetaSpendReport }     from "../../../integrations/meta";
 import { logger } from "../../../core/logger";
 
 export interface ProfitLoss {
-  revenue:    number;   // Ringba total revenue (USD)
-  adSpend:    number;   // Meta total spend (USD)
-  profit:     number;   // revenue - adSpend
-  roi:        number;   // (profit / adSpend) * 100  — percent return on ad spend
-  margin:     number;   // (profit / revenue) * 100  — profit margin percent
+  revenue:  number;   // Ringba total revenue (USD)
+  adSpend:  number;   // Meta total spend (USD)
+  profit:   number;   // revenue - adSpend
+  roi:      number;   // (profit / adSpend) * 100
+  margin:   number;   // (profit / revenue) * 100
 }
 
 export interface DataCollectionOutput {
-  rawData:     Record<string, unknown>;
-  dataSource:  string;
-  collectedAt: string;
-  ringba?:     RingbaRevenueReport;
-  meta?:       MetaSpendReport;
-  pl?:         ProfitLoss;
+  rawData:      Record<string, unknown>;
+  dataSource:   string;
+  collectedAt:  string;
+  // MTD
+  ringba?:      RingbaRevenueReport;
+  meta?:        MetaSpendReport;
+  pl?:          ProfitLoss;
+  // Today
+  ringbaToday?: RingbaRevenueReport;
+  metaToday?:   MetaSpendReport;
+  plToday?:     ProfitLoss;
 }
 
 /**
  * Stage 1 — Data Collection (Final Expense Reporting)
  *
- * Pulls live data from Ringba (revenue) and Meta Ads (spend), computes P&L,
- * and writes a workspace snapshot. All three data sets are passed to the
- * analysis stage as structured rawData for Claude.
+ * Pulls two date windows in parallel:
+ *   - MTD  (Apr 1 → today)  — month-to-date totals
+ *   - Today (today → today) — intraday snapshot for twice-daily runs
+ *
+ * Both Ringba (revenue) and Meta (spend) are pulled for each window.
+ * P&L is computed for each window when both sources are available.
  *
  * instance.md config:
  *   ringba:
  *     campaignName: O&O_SOMQ_FINAL_EXPENSE
- *     reportPeriod: mtd           # mtd | wtd | ytd | custom
- *
+ *     reportPeriod: mtd           # drives the MTD window
  *   meta:
  *     adAccountId: "999576488367816"
  *     campaignIds: []             # empty = entire account spend
@@ -53,13 +60,16 @@ export class DataCollectionStage implements IStage {
   async run(job: Job): Promise<DataCollectionOutput> {
     logger.info("Running data-collection stage", { jobId: job.id });
 
-    const cfg = loadInstanceConfig(job.workflowType);
-
-    // Resolve date range once — shared by both Ringba and Meta pulls
+    const cfg       = loadInstanceConfig(job.workflowType);
     const ringbaCfg = cfg.ringba;
-    const { startDate, endDate } = ringbaCfg
+    const metaCfg   = cfg.meta;
+
+    // ── Date windows ────────────────────────────────────────────────────────
+    const { startDate: mtdStart, endDate: mtdEnd } = ringbaCfg
       ? getDateRange(ringbaCfg.reportPeriod ?? "mtd", ringbaCfg.startDate, ringbaCfg.endDate)
       : getDateRange("mtd");
+
+    const todayStr = new Date().toISOString().slice(0, 10);
 
     // 1. Parse any manual data from brief
     let rawData: Record<string, unknown> = {};
@@ -76,230 +86,211 @@ export class DataCollectionStage implements IStage {
       dataSource = "brief-text";
     }
 
-    // 2. Pull Ringba revenue
-    let ringbaReport: RingbaRevenueReport | undefined;
+    // ── Pull all four data sources in parallel ───────────────────────────────
+    const [ringbaMTD, ringbaToday, metaMTD, metaToday] = await Promise.all([
+      // Ringba MTD
+      ringbaCfg?.campaignName
+        ? getCampaignRevenue({ campaignName: ringbaCfg.campaignName, startDate: mtdStart, endDate: mtdEnd })
+            .catch((err) => { logger.warn("data-collection: Ringba MTD failed", { error: String(err) }); return null; })
+        : Promise.resolve(null),
 
-    try {
-      if (ringbaCfg?.campaignName) {
-        const report = await getCampaignRevenue({
-          campaignName: ringbaCfg.campaignName,
-          startDate,
-          endDate,
-        });
+      // Ringba Today
+      ringbaCfg?.campaignName
+        ? getCampaignRevenue({ campaignName: ringbaCfg.campaignName, startDate: todayStr, endDate: todayStr })
+            .catch((err) => { logger.warn("data-collection: Ringba Today failed", { error: String(err) }); return null; })
+        : Promise.resolve(null),
 
-        if (report) {
-          ringbaReport = report;
-          rawData.ringbaTotalCalls = report.totalCalls;
-          rawData.ringbaPaidCalls  = report.paidCalls;
-          rawData.ringbaRevenue    = report.totalRevenue;
-          rawData.ringbaPayout     = report.totalPayout;
-          rawData.ringbaAvgPayout  = report.avgPayout;
-          rawData.ringbaCampaign   = report.campaignName;
-          rawData.ringbaDateRange  = `${startDate} → ${endDate}`;
-          dataSource = "ringba";
-        }
+      // Meta MTD
+      metaCfg?.adAccountId
+        ? getAdAccountSpend({ adAccountId: metaCfg.adAccountId, startDate: mtdStart, endDate: mtdEnd, campaignIds: metaCfg.campaignIds })
+            .catch((err) => { logger.warn("data-collection: Meta MTD failed", { error: String(err) }); return null; })
+        : Promise.resolve(null),
+
+      // Meta Today
+      metaCfg?.adAccountId
+        ? getAdAccountSpend({ adAccountId: metaCfg.adAccountId, startDate: todayStr, endDate: todayStr, campaignIds: metaCfg.campaignIds })
+            .catch((err) => { logger.warn("data-collection: Meta Today failed", { error: String(err) }); return null; })
+        : Promise.resolve(null),
+    ]);
+
+    // ── MTD metrics ──────────────────────────────────────────────────────────
+    if (ringbaMTD) {
+      rawData.mtdTotalCalls   = ringbaMTD.totalCalls;
+      rawData.mtdPaidCalls    = ringbaMTD.paidCalls;
+      rawData.mtdRevenue      = ringbaMTD.totalRevenue;
+      rawData.mtdPayout       = ringbaMTD.totalPayout;
+      rawData.mtdAvgPayout    = ringbaMTD.avgPayout;
+      rawData.mtdCampaign     = ringbaMTD.campaignName;
+      rawData.mtdDateRange    = `${mtdStart} → ${mtdEnd}`;
+      if (ringbaMTD.totalCalls > 0) {
+        rawData.mtdBillableRate = `${((ringbaMTD.paidCalls / ringbaMTD.totalCalls) * 100).toFixed(1)}%`;
       }
-    } catch (err) {
-      logger.warn("data-collection: Ringba pull failed", { jobId: job.id, error: String(err) });
+      dataSource = "ringba";
     }
 
-    // 3. Pull Meta Ads spend
-    let metaReport: MetaSpendReport | undefined;
+    if (metaMTD) {
+      rawData.mtdMetaSpend       = metaMTD.totalSpend;
+      rawData.mtdMetaImpressions = metaMTD.impressions;
+      rawData.mtdMetaClicks      = metaMTD.clicks;
+      rawData.mtdMetaCPC         = metaMTD.cpc;
+      rawData.mtdMetaCPM         = metaMTD.cpm;
+      rawData.mtdMetaCTR         = metaMTD.ctr;
+      if (dataSource === "ringba") dataSource = "ringba+meta";
+    }
 
-    try {
-      const metaCfg = cfg.meta;
-      if (metaCfg?.adAccountId) {
-        const report = await getAdAccountSpend({
-          adAccountId: metaCfg.adAccountId,
-          startDate,
-          endDate,
-          campaignIds: metaCfg.campaignIds,
-        });
+    const plMTD = this.computePL(ringbaMTD?.totalRevenue, metaMTD?.totalSpend);
+    if (plMTD) {
+      rawData.mtdProfit = plMTD.profit;
+      rawData.mtdROI    = plMTD.roi;
+      rawData.mtdMargin = plMTD.margin;
+    }
 
-        if (report) {
-          metaReport = report;
-          rawData.metaAdAccountId  = report.adAccountId;
-          rawData.metaSpend        = report.totalSpend;
-          rawData.metaImpressions  = report.impressions;
-          rawData.metaClicks       = report.clicks;
-          rawData.metaCPM          = report.cpm;
-          rawData.metaCPC          = report.cpc;
-          rawData.metaCTR          = report.ctr;
-          rawData.metaDateRange    = `${startDate} → ${endDate}`;
-          if (dataSource === "ringba") dataSource = "ringba+meta";
-        }
+    // ── Today metrics ────────────────────────────────────────────────────────
+    if (ringbaToday) {
+      rawData.todayTotalCalls   = ringbaToday.totalCalls;
+      rawData.todayPaidCalls    = ringbaToday.paidCalls;
+      rawData.todayRevenue      = ringbaToday.totalRevenue;
+      rawData.todayAvgPayout    = ringbaToday.avgPayout;
+      rawData.todayDate         = todayStr;
+      if (ringbaToday.totalCalls > 0) {
+        rawData.todayBillableRate = `${((ringbaToday.paidCalls / ringbaToday.totalCalls) * 100).toFixed(1)}%`;
       }
-    } catch (err) {
-      logger.warn("data-collection: Meta pull failed", { jobId: job.id, error: String(err) });
     }
 
-    // 4. Compute P&L when both data sources are available
-    let pl: ProfitLoss | undefined;
-
-    if (ringbaReport && metaReport) {
-      const revenue = ringbaReport.totalRevenue;
-      const adSpend = metaReport.totalSpend;
-      const profit  = revenue - adSpend;
-
-      pl = {
-        revenue,
-        adSpend,
-        profit,
-        roi:    adSpend    > 0 ? Math.round((profit / adSpend)  * 10000) / 100 : 0,
-        margin: revenue    > 0 ? Math.round((profit / revenue)  * 10000) / 100 : 0,
-      };
-
-      rawData.plRevenue = revenue;
-      rawData.plAdSpend = adSpend;
-      rawData.plProfit  = profit;
-      rawData.plROI     = pl.roi;
-      rawData.plMargin  = pl.margin;
-
-      logger.info("data-collection: P&L computed", {
-        jobId:    job.id,
-        revenue:  `$${revenue.toFixed(2)}`,
-        adSpend:  `$${adSpend.toFixed(2)}`,
-        profit:   `$${profit.toFixed(2)}`,
-        roi:      `${pl.roi}%`,
-        margin:   `${pl.margin}%`,
-      });
+    if (metaToday) {
+      rawData.todayMetaSpend       = metaToday.totalSpend;
+      rawData.todayMetaImpressions = metaToday.impressions;
+      rawData.todayMetaClicks      = metaToday.clicks;
+      rawData.todayMetaCPC         = metaToday.cpc;
     }
 
-    // 5. Write workspace snapshot
-    this.writeWorkspaceSnapshot(job.workflowType, rawData, ringbaReport, metaReport, pl);
+    const plToday = this.computePL(ringbaToday?.totalRevenue, metaToday?.totalSpend);
+    if (plToday) {
+      rawData.todayProfit = plToday.profit;
+      rawData.todayROI    = plToday.roi;
+      rawData.todayMargin = plToday.margin;
+    }
+
+    // ── Workspace snapshot ───────────────────────────────────────────────────
+    this.writeWorkspaceSnapshot(
+      job.workflowType, rawData, todayStr,
+      ringbaMTD  ?? undefined, metaMTD   ?? undefined, plMTD,
+      ringbaToday ?? undefined, metaToday ?? undefined, plToday,
+    );
 
     logger.info("Data collection complete", {
       jobId:      job.id,
       dataSource,
       fieldCount: Object.keys(rawData).length,
-      ringba:     ringbaReport
-        ? { totalCalls: ringbaReport.totalCalls, paidCalls: ringbaReport.paidCalls, revenue: ringbaReport.totalRevenue }
-        : "skipped",
-      meta:       metaReport
-        ? { spend: metaReport.totalSpend }
-        : "skipped",
-      pl:         pl ? { profit: pl.profit, roi: `${pl.roi}%` } : "skipped",
+      mtd:   { calls: ringbaMTD?.totalCalls, revenue: ringbaMTD?.totalRevenue, spend: metaMTD?.totalSpend, profit: plMTD?.profit },
+      today: { calls: ringbaToday?.totalCalls, revenue: ringbaToday?.totalRevenue, spend: metaToday?.totalSpend, profit: plToday?.profit },
     });
 
     return {
       rawData,
       dataSource,
-      collectedAt: new Date().toISOString(),
-      ringba:      ringbaReport,
-      meta:        metaReport,
-      pl,
+      collectedAt:  new Date().toISOString(),
+      ringba:       ringbaMTD  ?? undefined,
+      meta:         metaMTD   ?? undefined,
+      pl:           plMTD,
+      ringbaToday:  ringbaToday ?? undefined,
+      metaToday:    metaToday ?? undefined,
+      plToday,
+    };
+  }
+
+  // ── P&L helper ────────────────────────────────────────────────────────────
+
+  private computePL(revenue?: number, adSpend?: number): ProfitLoss | undefined {
+    if (revenue === undefined || adSpend === undefined) return undefined;
+    const profit = revenue - adSpend;
+    return {
+      revenue,
+      adSpend,
+      profit,
+      roi:    adSpend  > 0 ? Math.round((profit / adSpend)  * 10000) / 100 : 0,
+      margin: revenue  > 0 ? Math.round((profit / revenue)  * 10000) / 100 : 0,
     };
   }
 
   // ── Workspace snapshot ────────────────────────────────────────────────────
 
   private writeWorkspaceSnapshot(
-    instanceId: string,
-    rawData:    Record<string, unknown>,
-    ringba?:    RingbaRevenueReport,
-    meta?:      MetaSpendReport,
-    pl?:        ProfitLoss
+    instanceId:  string,
+    rawData:     Record<string, unknown>,
+    todayStr:    string,
+    ringbaMTD?:  RingbaRevenueReport,
+    metaMTD?:    MetaSpendReport,
+    plMTD?:      ProfitLoss,
+    ringbaToday?: RingbaRevenueReport,
+    metaToday?:  MetaSpendReport,
+    plToday?:    ProfitLoss,
   ): void {
     try {
       const workspaceDir = path.join(process.cwd(), "src", "instances", instanceId, "workspace");
       fs.mkdirSync(workspaceDir, { recursive: true });
 
-      const ts      = new Date().toISOString();
-      const dateStr = ts.slice(0, 10);
-      const usd     = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const ts  = new Date().toISOString();
+      const usd = (n: number) =>
+        `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 
-      // WORKING.md — current run (overwritten each time)
-      const sections: string[] = [
-        `# Current Report Run`,
-        ``,
-        `**Last updated:** ${ts}`,
-        `**Instance:** ${instanceId}`,
-        ``,
-      ];
+      const sections: string[] = [`# Current Report Run\n`, `**Last updated:** ${ts}`, `**Instance:** ${instanceId}\n`];
 
-      // Ringba section
-      if (ringba) {
+      // Today section
+      sections.push(`## Today — ${todayStr}`);
+      sections.push(`| Metric | Value |`, `|--------|-------|`);
+      if (ringbaToday) {
         sections.push(
-          `## Ringba Revenue`,
-          `| Metric | Value |`,
-          `|--------|-------|`,
-          `| Campaign | ${ringba.campaignName} |`,
-          `| Period | ${ringba.startDate} → ${ringba.endDate} |`,
-          `| Total Calls | ${ringba.totalCalls} |`,
-          `| Billable Calls | ${ringba.paidCalls} |`,
-          `| Billable Rate | ${ringba.totalCalls > 0 ? ((ringba.paidCalls / ringba.totalCalls) * 100).toFixed(1) : "0"}% |`,
-          `| Revenue | ${usd(ringba.totalRevenue)} |`,
-          `| Avg Payout | ${usd(ringba.avgPayout)} |`,
-          ``,
-        );
-      } else {
-        sections.push(`## Ringba Revenue\n_Not configured_\n`);
-      }
-
-      // Meta section
-      if (meta) {
-        sections.push(
-          `## Meta Ads Spend`,
-          `| Metric | Value |`,
-          `|--------|-------|`,
-          `| Ad Account | ${meta.adAccountId} |`,
-          `| Period | ${meta.startDate} → ${meta.endDate} |`,
-          `| Total Spend | ${usd(meta.totalSpend)} |`,
-          `| Impressions | ${meta.impressions.toLocaleString()} |`,
-          `| Clicks | ${meta.clicks.toLocaleString()} |`,
-          `| CPM | ${usd(meta.cpm)} |`,
-          `| CPC | ${usd(meta.cpc)} |`,
-          `| CTR | ${meta.ctr.toFixed(2)}% |`,
-          ``,
-        );
-      } else {
-        sections.push(`## Meta Ads Spend\n_Not configured or unavailable_\n`);
-      }
-
-      // P&L section
-      if (pl) {
-        const roiLabel  = pl.roi    >= 0 ? `+${pl.roi}%`    : `${pl.roi}%`;
-        const profitLbl = pl.profit >= 0 ? usd(pl.profit)   : `-${usd(Math.abs(pl.profit))}`;
-        sections.push(
-          `## P&L Summary`,
-          `| Metric | Value |`,
-          `|--------|-------|`,
-          `| Revenue (Ringba) | ${usd(pl.revenue)} |`,
-          `| Ad Spend (Meta) | ${usd(pl.adSpend)} |`,
-          `| **Profit** | **${profitLbl}** |`,
-          `| ROI | ${roiLabel} |`,
-          `| Margin | ${pl.margin}% |`,
-          ``,
+          `| Total Calls | ${ringbaToday.totalCalls} |`,
+          `| Billable Calls | ${ringbaToday.paidCalls} (${rawData.todayBillableRate ?? "—"}) |`,
+          `| Revenue | ${usd(ringbaToday.totalRevenue)} |`,
         );
       }
+      if (metaToday) sections.push(`| Meta Spend | ${usd(metaToday.totalSpend)} |`);
+      if (plToday)   sections.push(`| Profit | ${usd(plToday.profit)} |`, `| ROI | ${pct(plToday.roi)} |`);
+      sections.push("");
 
-      sections.push(`## Raw Data Snapshot`, "```json", JSON.stringify(rawData, null, 2), "```");
+      // MTD section
+      const mtdStart = ringbaMTD?.startDate ?? "";
+      const mtdEnd   = ringbaMTD?.endDate   ?? todayStr;
+      sections.push(`## Month to Date — ${mtdStart} → ${mtdEnd}`);
+      sections.push(`| Metric | Value |`, `|--------|-------|`);
+      if (ringbaMTD) {
+        sections.push(
+          `| Total Calls | ${ringbaMTD.totalCalls} |`,
+          `| Billable Calls | ${ringbaMTD.paidCalls} (${rawData.mtdBillableRate ?? "—"}) |`,
+          `| Revenue | ${usd(ringbaMTD.totalRevenue)} |`,
+          `| Avg Payout | ${usd(ringbaMTD.avgPayout)} |`,
+        );
+      }
+      if (metaMTD) {
+        sections.push(
+          `| Meta Spend | ${usd(metaMTD.totalSpend)} |`,
+          `| Impressions | ${metaMTD.impressions.toLocaleString()} |`,
+          `| Clicks | ${metaMTD.clicks.toLocaleString()} |`,
+          `| CPC | ${usd(metaMTD.cpc)} |`,
+        );
+      }
+      if (plMTD) sections.push(`| Profit | ${usd(plMTD.profit)} |`, `| ROI | ${pct(plMTD.roi)} |`, `| Margin | ${plMTD.margin.toFixed(1)}% |`);
+      sections.push("");
 
-      fs.writeFileSync(
-        path.join(workspaceDir, "WORKING.md"),
-        sections.join("\n"),
-        "utf8"
-      );
+      sections.push(`## Raw Data`, "```json", JSON.stringify(rawData, null, 2), "```");
+      fs.writeFileSync(path.join(workspaceDir, "WORKING.md"), sections.join("\n"), "utf8");
 
-      // MEMORY.md — append one line per run
+      // MEMORY.md — append per run
       const memPath = path.join(workspaceDir, "MEMORY.md");
-      if (!fs.existsSync(memPath)) {
-        fs.writeFileSync(memPath, `# Report Run History — ${instanceId}\n`, "utf8");
-      }
+      if (!fs.existsSync(memPath)) fs.writeFileSync(memPath, `# Report Run History — ${instanceId}\n`, "utf8");
       fs.appendFileSync(memPath, [
         ``,
-        `## ${dateStr} — ${ts}`,
-        ringba
-          ? `- Ringba: ${ringba.totalCalls} calls / ${ringba.paidCalls} billable / ${usd(ringba.totalRevenue)} revenue`
-          : `- Ringba: skipped`,
-        meta
-          ? `- Meta: ${usd(meta.totalSpend)} spend / ${meta.impressions.toLocaleString()} impressions`
-          : `- Meta: skipped`,
-        pl
-          ? `- P&L: ${usd(pl.profit)} profit / ${pl.roi >= 0 ? "+" : ""}${pl.roi}% ROI / ${pl.margin}% margin`
-          : `- P&L: insufficient data`,
+        `## ${todayStr} — ${ts}`,
+        ringbaMTD  ? `- MTD Ringba: ${ringbaMTD.totalCalls} calls / ${ringbaMTD.paidCalls} billable / ${usd(ringbaMTD.totalRevenue)}` : "- MTD Ringba: skipped",
+        metaMTD    ? `- MTD Meta: ${usd(metaMTD.totalSpend)} spend` : "- MTD Meta: skipped",
+        plMTD      ? `- MTD P&L: ${usd(plMTD.profit)} profit / ${pct(plMTD.roi)} ROI` : "- MTD P&L: insufficient data",
+        ringbaToday ? `- Today Ringba: ${ringbaToday.totalCalls} calls / ${ringbaToday.paidCalls} billable / ${usd(ringbaToday.totalRevenue)}` : "- Today Ringba: skipped",
+        metaToday  ? `- Today Meta: ${usd(metaToday.totalSpend)} spend` : "- Today Meta: skipped",
         ``,
-      ].filter(Boolean).join("\n"), "utf8");
+      ].join("\n"), "utf8");
 
       logger.info("data-collection: workspace snapshot written", { path: workspaceDir });
     } catch (err) {

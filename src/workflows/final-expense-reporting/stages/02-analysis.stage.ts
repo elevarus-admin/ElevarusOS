@@ -6,14 +6,28 @@ import { claudeJSON } from "../../../core/claude-client";
 import { logger } from "../../../core/logger";
 import { DataCollectionOutput } from "./01-data-collection.stage";
 
+export interface AnalysisPeriod {
+  calls:         string;
+  billableCalls: string;
+  billableRate:  string;
+  revenue:       string;
+  avgPayout?:    string;
+  metaSpend?:    string;
+  metaCPC?:      string;
+  metaCTR?:      string;
+  profit?:       string;
+  roi?:          string;
+  margin?:       string;
+}
+
 export interface AnalysisOutput {
-  periodLabel:        string;
-  headlineMetrics:    Record<string, string>;
-  keyTrends:          string[];
-  wins:               string[];
-  concerns:           string[];
-  vsLastPeriod:       string;
-  recommendedActions: string[];
+  todayLabel: string;
+  mtdLabel:   string;
+  today:      AnalysisPeriod;
+  mtd:        AnalysisPeriod;
+  keyTrends:  string[];
+  concerns:   string[];
+  alertLevel: "green" | "yellow" | "red";
 }
 
 const INSTANCES_DIR = path.resolve(__dirname, "../../../instances");
@@ -54,7 +68,7 @@ export class AnalysisStage implements IStage {
     ].filter(Boolean).join("\n");
 
     const userPrompt = [
-      `Analyze the following campaign data for: ${job.request.title}`,
+      `Analyze the following campaign data:`,
       ``,
       `<collected_data>`,
       JSON.stringify(collected.rawData, null, 2),
@@ -62,13 +76,21 @@ export class AnalysisStage implements IStage {
       ``,
       `Return this exact JSON structure:`,
       JSON.stringify({
-        periodLabel:        "<human-readable period, e.g. 'April MTD (Apr 1–16)'>",
-        headlineMetrics:    { "<metric>": "<formatted value>" },
-        keyTrends:          ["<trend>"],
-        wins:               ["<positive finding>"],
-        concerns:           ["<concern or risk>"],
-        vsLastPeriod:       "<one sentence vs prior period, or 'No prior period data'>",
-        recommendedActions: ["<specific, actionable recommendation>"],
+        todayLabel: "<e.g. 'Today — Apr 17'>",
+        mtdLabel:   "<e.g. 'Month to Date — Apr 1–17'>",
+        today: {
+          calls: "<N>", billableCalls: "<N>", billableRate: "<%>",
+          revenue: "<$X>", metaSpend: "<$X or null>", profit: "<$X or null>", roi: "<%  or null>",
+        },
+        mtd: {
+          calls: "<N>", billableCalls: "<N>", billableRate: "<%>",
+          revenue: "<$X>", avgPayout: "<$X>",
+          metaSpend: "<$X or null>", metaCPC: "<$X or null>", metaCTR: "<% or null>",
+          profit: "<$X or null>", roi: "<% or null>", margin: "<% or null>",
+        },
+        keyTrends:  ["<trend with numbers>"],
+        concerns:   ["<concern with numbers>"],
+        alertLevel: "green | yellow | red",
       }, null, 2),
     ].join("\n");
 
@@ -76,8 +98,9 @@ export class AnalysisStage implements IStage {
 
     logger.info("Analysis stage complete", {
       jobId:        job.id,
-      trendCount:   result.keyTrends?.length  ?? 0,
-      concernCount: result.concerns?.length   ?? 0,
+      trendCount:   result.keyTrends?.length ?? 0,
+      concernCount: result.concerns?.length  ?? 0,
+      alertLevel:   result.alertLevel,
     });
 
     return result;
