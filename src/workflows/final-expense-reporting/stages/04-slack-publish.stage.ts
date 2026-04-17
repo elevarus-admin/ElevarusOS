@@ -3,7 +3,7 @@ import * as path from "path";
 import { IStage, requireStageOutput } from "../../../core/stage.interface";
 import { Job } from "../../../models/job.model";
 import { loadInstanceConfig } from "../../../core/instance-config";
-import { postToSlack, buildReportBlocks } from "../../../core/slack-client";
+import { postToSlack } from "../../../core/slack-client";
 import { logger } from "../../../core/logger";
 import { SummaryOutput } from "./03-summary.stage";
 
@@ -41,25 +41,12 @@ export class SlackPublishStage implements IStage {
 
     const summary = requireStageOutput<SummaryOutput>(job, "summary");
 
-    // Resolve the target Slack channel and agent name from the instance config
+    // Resolve the target Slack channel from instance config
     let slackChannel: string | undefined;
-    let agentName    = job.workflowType;
-    let reportPeriod = "MTD";
     try {
-      const cfg    = loadInstanceConfig(job.workflowType);
+      const cfg = loadInstanceConfig(job.workflowType);
       slackChannel = cfg.notify.slackChannel;
-      if (cfg.name) agentName = cfg.name;
-      const period = cfg.ringba?.reportPeriod ?? "mtd";
-      const periodLabels: Record<string, string> = {
-        mtd: `${new Date().toLocaleString("en-US", { month: "long" })} MTD`,
-        wtd: "Week to Date",
-        ytd: "Year to Date",
-      };
-      reportPeriod = periodLabels[period] ?? period.toUpperCase();
     } catch { /* instance config optional */ }
-
-    // Title: "<Agent Name> — <Report Period>"
-    const reportTitle = `${agentName} — ${reportPeriod}`;
 
     // Dry-run mode: skip Slack post and just print the report here for verification
     if (process.env.DRY_RUN === "true") {
@@ -93,20 +80,10 @@ export class SlackPublishStage implements IStage {
       };
     }
 
-    // Build rich Block Kit layout for the report
-    const blocks = buildReportBlocks({
-      title:        reportTitle,
-      oneLiner:     summary.oneLiner,
-      alertLevel:   summary.alertLevel,
-      slackMessage: summary.slackMessage,
-      instanceId:   job.workflowType,
-    });
-
-    // Post to the configured channel
+    // Post the compact message directly as mrkdwn — no Block Kit wrapper
     const ts = await postToSlack({
       channel: slackChannel,
-      text:    `${summary.oneLiner}\n\n${summary.slackMessage}`,  // plain-text fallback
-      blocks,
+      text:    summary.slackMessage,
     });
 
     const published = ts !== undefined;
