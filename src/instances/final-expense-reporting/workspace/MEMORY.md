@@ -201,3 +201,38 @@
 - MTD P&L: $-1,863.78 profit / -38.5% ROI
 - Today Ringba: 10 calls / 7 billable / $228.00
 - Today Meta: $606.36 spend
+
+## 2026-04-17 — 2026-04-17T20:34:18.546Z
+- MTD Ringba: 196 calls / 75 billable / $3,041.40
+- MTD Meta: $4,939.06 spend
+- MTD P&L: $-1,897.66 profit / -38.4% ROI
+- Today Ringba: 16 calls / 11 billable / $321.00
+- Today Meta: $700.84 spend
+
+## 2026-04-17 — 2026-04-17T21:01:23.658Z
+- MTD Ringba: 204 calls / 70 billable / $2,971.80
+- MTD Meta: $4,972.13 spend
+- MTD P&L: $-2,000.33 profit / -40.2% ROI
+- Today Ringba: 17 calls / 11 billable / $366.00
+- Today Meta: $733.79 spend
+
+## 2026-04-17 — 2026-04-17T21:01:25.658Z
+- MTD Ringba: 190 calls / 73 billable / $2,783.10
+- MTD Meta: $4,972.13 spend
+- MTD P&L: $-2,189.03 profit / -44.0% ROI
+- Today Ringba: 18 calls / 12 billable / $366.00
+- Today Meta: $733.79 spend
+
+## 2026-04-17 — 2026-04-17T21:02:20.382Z
+- MTD Ringba: 197 calls / 67 billable / $2,699.10
+- MTD Meta: $4,972.13 spend
+- MTD P&L: $-2,273.03 profit / -45.7% ROI
+- Today Ringba: 20 calls / 14 billable / $366.00
+- Today Meta: $733.79 spend
+
+## 2026-04-17 — 2026-04-17T21:02:26.374Z
+- MTD Ringba: 202 calls / 71 billable / $2,529.30
+- MTD Meta: $4,972.13 spend
+- MTD P&L: $-2,442.83 profit / -49.1% ROI
+- Today Ringba: 20 calls / 14 billable / $366.00
+- Today Meta: $733.79 spend
