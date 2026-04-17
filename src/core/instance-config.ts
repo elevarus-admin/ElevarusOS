@@ -60,8 +60,10 @@ export interface InstanceRingba {
 /** Optional cron schedule for this instance. */
 export interface InstanceSchedule {
   enabled: boolean;
-  /** Cron expression in UTC. e.g. "0 9 * * 1" = every Monday at 9am UTC */
+  /** Cron expression. e.g. "0 9,11,13,15,17 * * 1-5" = weekdays 9am–5pm every 2h */
   cron?: string;
+  /** IANA timezone for the cron expression. Defaults to "UTC". e.g. "America/New_York" */
+  timezone?: string;
   /** Human-readable description of the schedule */
   description?: string;
 }
@@ -141,6 +143,7 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
     schedule: {
       enabled:     Boolean(schedule.enabled ?? false),
       cron:        schedule.cron        ? String(schedule.cron)        : undefined,
+      timezone:    schedule.timezone    ? String(schedule.timezone)    : undefined,
       description: schedule.description ? String(schedule.description) : undefined,
     },
     ringba: ringba?.campaignName

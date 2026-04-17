@@ -61,6 +61,25 @@ export class SlackPublishStage implements IStage {
     // Title: "<Agent Name> — <Report Period>"
     const reportTitle = `${agentName} — ${reportPeriod}`;
 
+    // Dry-run mode: skip Slack post and just print the report here for verification
+    if (process.env.DRY_RUN === "true") {
+      logger.info("slack-publish: DRY RUN — skipping Slack post");
+      const publishedAt = new Date().toISOString();
+      console.log("\n" + "═".repeat(60));
+      console.log("DRY RUN — Final Expense Report (not posted to Slack)");
+      console.log("═".repeat(60));
+      console.log("\n📋 ONE-LINER:\n" + summary.oneLiner);
+      console.log("\n📨 SLACK MESSAGE:\n");
+      console.log(summary.slackMessage);
+      console.log("\n" + "═".repeat(60) + "\n");
+      this.writeReportToWorkspace(job.workflowType, summary, publishedAt, undefined, undefined);
+      return {
+        published:   false,
+        message:     summary.slackMessage,
+        publishedAt,
+      };
+    }
+
     if (!slackChannel) {
       logger.warn("slack-publish: no slackChannel configured — skipping", {
         jobId:        job.id,

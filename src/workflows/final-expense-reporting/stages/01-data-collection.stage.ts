@@ -88,15 +88,15 @@ export class DataCollectionStage implements IStage {
 
     // ── Pull all four data sources in parallel ───────────────────────────────
     const [ringbaMTD, ringbaToday, metaMTD, metaToday] = await Promise.all([
-      // Ringba MTD
+      // Ringba MTD — minCallDurationSeconds=0: count all records (matches Ringba UI "Incoming")
       ringbaCfg?.campaignName
-        ? getCampaignRevenue({ campaignName: ringbaCfg.campaignName, startDate: mtdStart, endDate: mtdEnd })
+        ? getCampaignRevenue({ campaignName: ringbaCfg.campaignName, startDate: mtdStart, endDate: mtdEnd, minCallDurationSeconds: 0 })
             .catch((err) => { logger.warn("data-collection: Ringba MTD failed", { error: String(err) }); return null; })
         : Promise.resolve(null),
 
-      // Ringba Today
+      // Ringba Today — minCallDurationSeconds=30: drop sub-threshold routing failures and live calls
       ringbaCfg?.campaignName
-        ? getCampaignRevenue({ campaignName: ringbaCfg.campaignName, startDate: todayStr, endDate: todayStr })
+        ? getCampaignRevenue({ campaignName: ringbaCfg.campaignName, startDate: todayStr, endDate: todayStr, minCallDurationSeconds: 30 })
             .catch((err) => { logger.warn("data-collection: Ringba Today failed", { error: String(err) }); return null; })
         : Promise.resolve(null),
 

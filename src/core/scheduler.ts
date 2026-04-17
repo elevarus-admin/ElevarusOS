@@ -71,12 +71,15 @@ export class Scheduler {
           continue;
         }
 
+        const timezone = cfg.schedule.timezone ?? "UTC";
+
         const task = cron.schedule(
           expression,
           () => {
             logger.info("Scheduler firing", {
               instanceId,
               cron: expression,
+              timezone,
               description: cfg.schedule.description,
             });
             void this.triggerFn(instanceId).catch((err) => {
@@ -86,7 +89,7 @@ export class Scheduler {
               });
             });
           },
-          { timezone: "UTC" }
+          { timezone }
         );
 
         this.tasks.set(instanceId, task);
@@ -94,8 +97,9 @@ export class Scheduler {
 
         logger.info("Scheduler registered", {
           instanceId,
-          name: cfg.name,
-          cron: expression,
+          name:        cfg.name,
+          cron:        expression,
+          timezone,
           description: cfg.schedule.description ?? "(no description)",
         });
       } catch (err) {
