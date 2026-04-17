@@ -31,14 +31,29 @@ help:
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
-start:
+start: _check-deps
 	npm run start:all
 
-dev:
+dev: _check-deps-os
 	npm run dev:watch
 
-dashboard:
+dashboard: _check-deps-dashboard
 	npm run dashboard:dev
+
+# Guard: ensure both sets of node_modules exist before starting
+_check-deps: _check-deps-os _check-deps-dashboard
+
+_check-deps-os:
+	@if [ ! -d node_modules ]; then \
+		echo "Installing ElevarusOS dependencies..."; \
+		npm install; \
+	fi
+
+_check-deps-dashboard:
+	@if [ ! -f dashboard/node_modules/.bin/next ]; then \
+		echo "Installing dashboard dependencies (first run — takes ~2min)..."; \
+		cd dashboard && pnpm install && pnpm rebuild better-sqlite3 esbuild; \
+	fi
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 

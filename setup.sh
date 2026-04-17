@@ -32,6 +32,9 @@ else
   corepack enable
   pnpm install
 fi
+# Rebuild native addons (better-sqlite3, esbuild) — required after fresh install
+echo "   Rebuilding native modules..."
+pnpm rebuild better-sqlite3 esbuild 2>/dev/null || true
 cd ..
 echo "   dashboard: OK"
 
