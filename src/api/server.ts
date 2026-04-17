@@ -25,13 +25,18 @@
  * Leave unset to run open (fine for local/internal use).
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import express, { Request, Response, NextFunction } from "express";
 import { IJobStore } from "../core/job-store";
 import { WorkflowRegistry } from "../core/workflow-registry";
 import { Orchestrator } from "../core/orchestrator";
 import { listInstanceIds, loadInstanceConfig } from "../core/instance-config";
+import { syncBotsToDashboard } from "../core/dashboard-sync";
 import { logger } from "../core/logger";
 import { BlogRequest } from "../models/blog-request.model";
+
+const INSTANCES_DIR = path.resolve(__dirname, "../instances");
 
 export interface ApiServerOptions {
   port: number;
@@ -95,6 +100,10 @@ export class ApiServer {
 
     // ── Schedule ─────────────────────────────────────────────────────────────
     r.get("/api/schedule", this.handleAsync(this.getSchedule.bind(this)));
+
+    // ── Instances (agent management) ─────────────────────────────────────────
+    r.get("/api/instances", this.handleAsync(this.listInstances.bind(this)));
+    r.post("/api/instances", this.handleAsync(this.createInstance.bind(this)));
 
     // ── 404 catch-all ────────────────────────────────────────────────────────
     r.use((_req, res) => {
@@ -360,6 +369,135 @@ export class ApiServer {
     }).filter(Boolean);
 
     res.json({ schedule });
+  }
+
+  // ─── Instance handlers ────────────────────────────────────────────────────────
+
+  private async listInstances(_req: Request, res: Response): Promise<void> {
+    const instanceIds = listInstanceIds(true);
+    const instances = instanceIds.map((id) => {
+      try {
+        const cfg = loadInstanceConfig(id);
+        return {
+          id: cfg.id,
+          name: cfg.name,
+          baseWorkflow: cfg.baseWorkflow,
+          enabled: cfg.enabled,
+          brand: cfg.brand,
+          notify: cfg.notify,
+          schedule: cfg.schedule,
+          instanceDir: path.join(INSTANCES_DIR, id),
+        };
+      } catch {
+        return { id, error: "config unavailable" };
+      }
+    });
+    res.json({ instances });
+  }
+
+  /**
+   * POST /api/instances
+   *
+   * Creates a new bot instance from a template and syncs it to the dashboard.
+   *
+   * Body:
+   *   id            string   — unique slug (e.g. "acme-blog")
+   *   name          string   — human-readable name
+   *   baseWorkflow  string   — "blog" | "reporting"
+   *   voice         string   — brand voice/style
+   *   audience      string   — target reader description
+   *   tone          string   — tone descriptor
+   *   industry?     string   — optional industry context
+   *   approver?     string   — approver email
+   *   slackChannel? string   — Slack channel ID
+   *
+   * After creation, register the new workflow in src/index.ts and restart.
+   */
+  private async createInstance(req: Request, res: Response): Promise<void> {
+    const {
+      id, name, baseWorkflow = "blog",
+      voice = "", audience = "", tone = "", industry,
+      approver, slackChannel,
+    } = req.body ?? {};
+
+    if (!id || !name) {
+      res.status(400).json({ error: "id and name are required" });
+      return;
+    }
+
+    // Validate ID — must be URL-safe slug
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) {
+      res.status(400).json({ error: "id must be a lowercase slug (letters, numbers, hyphens)" });
+      return;
+    }
+
+    if (!["blog", "reporting"].includes(baseWorkflow)) {
+      res.status(400).json({ error: 'baseWorkflow must be "blog" or "reporting"' });
+      return;
+    }
+
+    const instanceDir = path.join(INSTANCES_DIR, id);
+    if (fs.existsSync(instanceDir)) {
+      res.status(409).json({ error: `Instance "${id}" already exists` });
+      return;
+    }
+
+    // Create directory + instance.md
+    fs.mkdirSync(instanceDir, { recursive: true });
+
+    const instanceMd = [
+      `---`,
+      `id: ${id}`,
+      `name: ${name}`,
+      `baseWorkflow: ${baseWorkflow}`,
+      `enabled: true`,
+      ``,
+      `brand:`,
+      `  voice: "${voice}"`,
+      `  audience: "${audience}"`,
+      `  tone: "${tone}"`,
+      industry ? `  industry: "${industry}"` : `  # industry: ""`,
+      ``,
+      `notify:`,
+      approver     ? `  approver: ${approver}` : `  # approver: approver@example.com`,
+      slackChannel ? `  slackChannel: ${slackChannel}` : `  # slackChannel: ~`,
+      ``,
+      `schedule:`,
+      `  enabled: false`,
+      `  # cron: "0 9 * * 1"`,
+      `  # description: "Weekly run on Mondays at 9am UTC"`,
+      `---`,
+      ``,
+      `# ${name}`,
+      ``,
+      `${name} — a ${baseWorkflow} bot instance built on ElevarusOS.`,
+      ``,
+      `## Next steps`,
+      ``,
+      `1. Add \`registry.register(build${baseWorkflow === "blog" ? "Blog" : "Reporting"}WorkflowDefinition(notifiers, "${id}"));\` to \`src/index.ts\``,
+      `2. Restart ElevarusOS — the bot will appear in the dashboard automatically`,
+      `3. Submit a test job: \`npm run dev -- --once --bot ${id}\``,
+    ].join("\n");
+
+    fs.writeFileSync(path.join(instanceDir, "instance.md"), instanceMd, "utf8");
+
+    // Sync to dashboard immediately (non-fatal if MC isn't running)
+    try {
+      await syncBotsToDashboard([id]);
+    } catch {
+      // Dashboard sync is best-effort
+    }
+
+    logger.info("API: instance created", { id, name, baseWorkflow });
+
+    res.status(201).json({
+      message: "Instance created",
+      id,
+      name,
+      baseWorkflow,
+      instanceDir,
+      nextStep: `Add registry.register(build${baseWorkflow === "blog" ? "Blog" : "Reporting"}WorkflowDefinition(notifiers, "${id}")); to src/index.ts and restart.`,
+    });
   }
 
   // ─── Utility ─────────────────────────────────────────────────────────────────
