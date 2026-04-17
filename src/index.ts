@@ -34,6 +34,8 @@ import { Scheduler } from "./core/scheduler";
 import { ApiServer } from "./api/server";
 import { MissionControlBridge } from "./adapters/bridge/mission-control.bridge";
 import { syncInstancesToSupabase } from "./core/instance-sync";
+import { syncBotsToDashboard } from "./core/dashboard-sync";
+import { DashboardPoller } from "./core/dashboard-poller";
 
 // Intake adapters
 import { ClickUpIntakeAdapter } from "./adapters/intake/clickup.adapter";
@@ -93,11 +95,17 @@ async function main(): Promise<void> {
   // Set MISSION_CONTROL_URL + MISSION_CONTROL_API_KEY in .env to enable.
   // Start Mission Control:  cd dashboard && pnpm dev  (port 3000)
 
-  const bridge = new MissionControlBridge();
+  const bridge = new MissionControlBridge(jobStore);
   orchestrator.setBridge(bridge);
+
+  // Restore MC task ID map from job store (survives restarts)
+  await bridge.restoreTaskIdMap();
 
   // Sync instance configs to Supabase (no-op if Supabase not configured)
   await syncInstancesToSupabase();
+
+  // Register bot instances as agents in Mission Control dashboard
+  await syncBotsToDashboard();
 
   // ─── API server ───────────────────────────────────────────────────────────
   // GET  /api/health | /api/bots | /api/jobs | /api/schedule
@@ -149,11 +157,16 @@ async function main(): Promise<void> {
   });
   scheduler.start();
 
+  // Dashboard poller — detects approvals made in Mission Control and syncs them back
+  const dashboardPoller = new DashboardPoller(jobStore, bridge);
+  dashboardPoller.start();
+
   // Graceful shutdown
   const shutdown = (): void => {
     logger.info("Shutting down...");
     orchestrator.stop();
     scheduler.stop();
+    dashboardPoller.stop();
     process.exit(0);
   };
 

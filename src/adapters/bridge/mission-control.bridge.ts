@@ -1,4 +1,5 @@
 import { Job, JobStatus } from "../../models/job.model";
+import { IJobStore } from "../../core/job-store";
 import { logger } from "../../core/logger";
 
 /**
@@ -10,8 +11,6 @@ import { logger } from "../../core/logger";
  * ─── Setup ───────────────────────────────────────────────────────────────────
  *
  * 1. Start Mission Control:
- *      npm run dashboard:dev          (from repo root)
- *      — or —
  *      cd dashboard && pnpm dev
  *
  * 2. Get an API key:
@@ -22,8 +21,8 @@ import { logger } from "../../core/logger";
  *      MISSION_CONTROL_API_KEY=your-api-key-here
  *
  * 4. Enable the bridge in index.ts:
- *      const bridge = new MissionControlBridge();
- *      orchestrator.setBridge(bridge);     ← see orchestrator.ts
+ *      const bridge = new MissionControlBridge(jobStore);
+ *      orchestrator.setBridge(bridge);
  *
  * ─── Status mapping ──────────────────────────────────────────────────────────
  *
@@ -35,34 +34,57 @@ import { logger } from "../../core/logger";
  *   completed              →  done
  *   failed                 →  failed
  *
- * ─── Data stored in Mission Control ─────────────────────────────────────────
+ * ─── Persistence ─────────────────────────────────────────────────────────────
  *
- * - title: job.request.title
- * - description: job.request.brief
- * - status: mapped from JobStatus
- * - tags: [workflowType, instanceId]
- * - metadata: { jobId, workflowType, stages, approvalState, request fields }
- *
- * The metadata field holds the full stage progression so Mission Control can
- * show which stages have completed and what each one produced.
+ * mc_task_id is saved back to the job store (Supabase) after task creation.
+ * On startup, call restoreTaskIdMap() to rebuild the in-memory map from the
+ * store so updates work correctly after a restart.
  */
 export class MissionControlBridge {
   private readonly baseUrl: string;
   private readonly apiKey: string;
-  private readonly enabled: boolean;
+  readonly enabled: boolean;
 
   /** Map from ElevarusOS job.id → Mission Control task id (numeric) */
   private readonly taskIdMap = new Map<string, number>();
 
-  constructor() {
+  private readonly jobStore: IJobStore | null;
+
+  constructor(jobStore?: IJobStore) {
     this.baseUrl = (process.env.MISSION_CONTROL_URL ?? "http://localhost:3000").replace(/\/$/, "");
     this.apiKey = process.env.MISSION_CONTROL_API_KEY ?? "";
     this.enabled = Boolean(this.baseUrl && this.apiKey);
+    this.jobStore = jobStore ?? null;
 
     if (!this.enabled) {
       logger.info("Mission Control bridge: not configured (set MISSION_CONTROL_URL + MISSION_CONTROL_API_KEY to enable)");
     } else {
       logger.info("Mission Control bridge: enabled", { baseUrl: this.baseUrl });
+    }
+  }
+
+  // ─── Startup ──────────────────────────────────────────────────────────────
+
+  /**
+   * Rebuild the in-memory taskIdMap from the job store.
+   * Call once at startup so existing jobs keep their MC task IDs across restarts.
+   */
+  async restoreTaskIdMap(): Promise<void> {
+    if (!this.enabled || !this.jobStore) return;
+    try {
+      const jobs = await this.jobStore.list();
+      let restored = 0;
+      for (const job of jobs) {
+        if (job.mcTaskId) {
+          this.taskIdMap.set(job.id, job.mcTaskId);
+          restored++;
+        }
+      }
+      if (restored > 0) {
+        logger.info("Mission Control bridge: restored task ID map", { count: restored });
+      }
+    } catch (err) {
+      logger.warn("Mission Control bridge: could not restore task ID map", { error: String(err) });
     }
   }
 
@@ -72,7 +94,11 @@ export class MissionControlBridge {
     if (!this.enabled) return;
     try {
       const taskId = await this.createTask(job);
-      if (taskId) this.taskIdMap.set(job.id, taskId);
+      if (taskId) {
+        this.taskIdMap.set(job.id, taskId);
+        // Persist mc_task_id so the map survives restarts
+        await this.persistMcTaskId(job, taskId);
+      }
     } catch (err) {
       logger.warn("Mission Control: failed to create task", { jobId: job.id, error: String(err) });
     }
@@ -95,6 +121,33 @@ export class MissionControlBridge {
     }
   }
 
+  // ─── Approval polling ─────────────────────────────────────────────────────
+
+  /**
+   * Returns jobs that MC has marked done/quality_review for a given set of
+   * ElevarusOS job IDs. Used by the approval poller.
+   * Returns { jobId, mcStatus } for any job whose MC task has moved past "review".
+   */
+  async pollForApprovals(jobIds: string[]): Promise<Array<{ jobId: string; mcStatus: string }>> {
+    if (!this.enabled || jobIds.length === 0) return [];
+    const results: Array<{ jobId: string; mcStatus: string }> = [];
+
+    for (const jobId of jobIds) {
+      const taskId = this.taskIdMap.get(jobId);
+      if (!taskId) continue;
+      try {
+        const task = await this.getTask(taskId);
+        if (task && (task.status === "done" || task.status === "quality_review")) {
+          results.push({ jobId, mcStatus: task.status });
+        }
+      } catch {
+        // skip — transient error
+      }
+    }
+
+    return results;
+  }
+
   // ─── API calls ────────────────────────────────────────────────────────────
 
   private async createTask(job: Job): Promise<number | null> {
@@ -103,6 +156,7 @@ export class MissionControlBridge {
       description: this.buildDescription(job),
       status: this.mapStatus(job.status),
       priority: "medium",
+      assigned_to: job.workflowType,
       tags: [job.workflowType, ...(job.workflowType.includes("blog") ? ["blog"] : ["reporting"])],
       metadata: this.buildMetadata(job),
     };
@@ -110,7 +164,6 @@ export class MissionControlBridge {
     const res = await this.post("/api/tasks", body);
     if (!res) return null;
 
-    // MC returns { task: { id, ... } }
     const taskId = res.task?.id ?? res.id;
     if (!taskId) {
       logger.warn("Mission Control: POST succeeded but no task ID in response", { jobId: job.id, res });
@@ -133,19 +186,31 @@ export class MissionControlBridge {
     logger.debug("Mission Control: task updated", { jobId: job.id, taskId, status: job.status });
   }
 
+  private async getTask(taskId: number): Promise<{ status: string } | null> {
+    const res = await this.get(`/api/tasks/${taskId}`);
+    return res?.task ?? res ?? null;
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
+  private async persistMcTaskId(job: Job, mcTaskId: number): Promise<void> {
+    if (!this.jobStore) return;
+    try {
+      const updated = { ...job, mcTaskId };
+      await this.jobStore.save(updated);
+    } catch (err) {
+      logger.warn("Mission Control: failed to persist mc_task_id", { jobId: job.id, mcTaskId, error: String(err) });
+    }
+  }
+
   private mapStatus(status: JobStatus): string {
-    // Mission Control status values: inbox | in_progress | review | quality_review | done | failed
-    // Note: "done" requires Aegis approval in Mission Control's workflow.
-    // ElevarusOS "completed" maps to "quality_review" — visible as a completed, pending final sign-off.
     const map: Record<JobStatus, string> = {
-      queued: "inbox",
-      running: "in_progress",
+      queued:            "inbox",
+      running:           "in_progress",
       awaiting_approval: "review",
-      approved: "quality_review",
-      completed: "quality_review",
-      failed: "failed",
+      approved:          "quality_review",
+      completed:         "done",
+      failed:            "failed",
     };
     return map[status] ?? "inbox";
   }
@@ -170,22 +235,22 @@ export class MissionControlBridge {
   private buildMetadata(job: Job): Record<string, unknown> {
     return {
       elevarus_job_id: job.id,
-      workflow_type: job.workflowType,
+      workflow_type:   job.workflowType,
       request: {
-        title: job.request.title,
+        title:    job.request.title,
         audience: job.request.audience,
-        keyword: job.request.targetKeyword,
-        cta: job.request.cta,
+        keyword:  job.request.targetKeyword,
+        cta:      job.request.cta,
         approver: job.request.approver,
       },
       stages: job.stages.map((s) => ({
-        name: s.name,
-        status: s.status,
-        startedAt: s.startedAt,
+        name:        s.name,
+        status:      s.status,
+        startedAt:   s.startedAt,
         completedAt: s.completedAt,
-        error: s.error,
+        error:       s.error,
       })),
-      approval: job.approval,
+      approval:  job.approval,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
     };
@@ -194,10 +259,7 @@ export class MissionControlBridge {
   private async post(path: string, body: unknown): Promise<any | null> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-      },
+      headers: { "Content-Type": "application/json", "x-api-key": this.apiKey },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -211,15 +273,20 @@ export class MissionControlBridge {
   private async put(path: string, body: unknown): Promise<void> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-      },
+      headers: { "Content-Type": "application/json", "x-api-key": this.apiKey },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       logger.warn("Mission Control PUT failed", { path, status: res.status, body: text.slice(0, 200) });
     }
+  }
+
+  private async get(path: string): Promise<any | null> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      headers: { "x-api-key": this.apiKey },
+    });
+    if (!res.ok) return null;
+    return res.json();
   }
 }

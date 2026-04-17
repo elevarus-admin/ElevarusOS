@@ -61,6 +61,9 @@ export interface Job {
 
   /** Publish handoff record (populated by the publish_placeholder stage) */
   publishRecord?: PublishRecord;
+
+  /** Mission Control task ID — set by the bridge after task creation */
+  mcTaskId?: number;
 }
 
 export interface ApprovalState {
