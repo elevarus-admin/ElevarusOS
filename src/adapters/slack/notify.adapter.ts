@@ -1,4 +1,4 @@
-import { INotifyAdapter } from "./notify.interface";
+import { INotifyAdapter } from "../notify/notify.interface";
 import { Job } from "../../models/job.model";
 import { EditorialOutput } from "../../models/output.model";
 import { config } from "../../config";

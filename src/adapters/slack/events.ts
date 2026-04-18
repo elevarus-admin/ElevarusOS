@@ -19,19 +19,19 @@
  */
 
 import * as crypto from "crypto";
-import { config } from "../config";
-import { logger } from "./logger";
-import { postToSlack } from "./slack-client";
-import { claudeConverseWithTools } from "./claude-converse";
-import { buildKnowledgeCatalog } from "./knowledge-catalog";
-import { WorkflowRegistry } from "./workflow-registry";
-import { IJobStore } from "./job-store";
-import { QA_TOOLS, claudeWantsBroadcast } from "./qa-tools";
+import { config } from "../../config";
+import { logger } from "../../core/logger";
+import { postToSlack } from "./client";
+import { claudeConverseWithTools } from "../../core/claude-converse";
+import { buildKnowledgeCatalog } from "../../core/knowledge-catalog";
+import { WorkflowRegistry } from "../../core/workflow-registry";
+import { IJobStore } from "../../core/job-store";
+import { QA_TOOLS, claudeWantsBroadcast } from "../../core/qa-tools";
 import {
   fetchChannelContext,
   renderContextBlock,
   ChannelContext,
-} from "./slack-context";
+} from "./context";
 
 /** Max age of a Slack request we'll accept. Slack recommends 5 min. */
 const MAX_REQUEST_AGE_SECONDS = 60 * 5;

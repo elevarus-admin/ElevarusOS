@@ -19,8 +19,8 @@
  *   users:read
  */
 
-import { logger } from "./logger";
-import { config } from "../config";
+import { logger } from "../../core/logger";
+import { config } from "../../config";
 
 const SLACK_API = "https://slack.com/api";
 

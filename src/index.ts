@@ -65,7 +65,7 @@ import { ClickUpIntakeAdapter } from "./adapters/intake/clickup.adapter";
 import { EmailIntakeAdapter }   from "./adapters/intake/email.adapter";
 
 // Notification adapters
-import { SlackNotifyAdapter } from "./adapters/notify/slack.adapter";
+import { SlackNotifyAdapter } from "./adapters/slack/notify.adapter";
 import { EmailNotifyAdapter } from "./adapters/notify/email.adapter";
 
 // Workflow builders

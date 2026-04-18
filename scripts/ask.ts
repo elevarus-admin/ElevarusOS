@@ -20,7 +20,7 @@ import { QA_TOOLS } from "../src/core/qa-tools";
 import { buildKnowledgeCatalog } from "../src/core/knowledge-catalog";
 
 // Notifiers are not called in QA — we just need the registry populated.
-import { SlackNotifyAdapter } from "../src/adapters/notify/slack.adapter";
+import { SlackNotifyAdapter } from "../src/adapters/slack/notify.adapter";
 import { EmailNotifyAdapter } from "../src/adapters/notify/email.adapter";
 import { buildBlogWorkflowDefinition }        from "../src/workflows/blog/blog.workflow";
 import { buildFinalExpenseReportingWorkflow } from "../src/workflows/final-expense-reporting/final-expense-reporting.workflow";

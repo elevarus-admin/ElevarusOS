@@ -12,8 +12,8 @@ and integrations.
 
 ## 1. Problem & Goal
 
-The current Slack integration (`src/adapters/notify/slack.adapter.ts`,
-`src/core/slack-client.ts`) is outbound only. It posts workflow lifecycle
+The current Slack integration (`src/adapters/slack/notify.adapter.ts`,
+`src/adapters/slack/client.ts`) is outbound only. It posts workflow lifecycle
 notifications — job started, draft ready for approval, failure, completion —
 but it does not receive messages.
 

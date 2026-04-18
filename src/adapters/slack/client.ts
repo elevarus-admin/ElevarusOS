@@ -1,4 +1,4 @@
-import { logger } from "./logger";
+import { logger } from "../../core/logger";
 
 const SLACK_API = "https://slack.com/api/chat.postMessage";
 

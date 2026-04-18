@@ -49,7 +49,7 @@ import {
   verifySlackSignature,
   handleSlackEvent,
   SlackEventEnvelope,
-} from "../core/slack-events";
+} from "../adapters/slack/events";
 import { config } from "../config";
 
 const INSTANCES_DIR = path.resolve(__dirname, "../instances");
@@ -832,7 +832,7 @@ export class ApiServer {
     }
 
     try {
-      const { postToSlack } = await import("../core/slack-client");
+      const { postToSlack } = await import("../adapters/slack/client");
       const ts = await postToSlack({ channel, text, blocks: blocks as any });
       res.json({ published: ts !== undefined, ts: ts ?? null, channel });
     } catch (err) {

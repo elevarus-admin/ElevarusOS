@@ -358,7 +358,7 @@ The ad account ID is the per-agent identifier. If one ad account runs multiple u
 
 ## Slack
 
-**Source:** `src/core/slack-client.ts`, `src/adapters/notify/slack.adapter.ts`
+**Source:** `src/adapters/slack/client.ts`, `src/adapters/slack/notify.adapter.ts`
 
 Two separate Slack surfaces exist in ElevarusOS:
 
@@ -377,7 +377,7 @@ Two separate Slack surfaces exist in ElevarusOS:
 Posts a message to any channel. Returns the message `ts` (timestamp) on success, or `undefined` if Slack is not configured or the call fails.
 
 ```typescript
-import { postToSlack } from '../core/slack-client';
+import { postToSlack } from '../adapters/slack/client';
 
 const ts = await postToSlack({
   channel: 'C0123456789',
@@ -400,7 +400,7 @@ const ts = await postToSlack({
 Builds a Slack Block Kit layout for campaign performance reports. Returns a `SlackBlock[]` array ready to pass to `postToSlack`.
 
 ```typescript
-import { buildReportBlocks } from '../core/slack-client';
+import { buildReportBlocks } from '../adapters/slack/client';
 
 const blocks = buildReportBlocks({
   title:        'Final Expense MTD Report',

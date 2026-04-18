@@ -3,7 +3,7 @@ import * as path from "path";
 import { IStage, requireStageOutput } from "../../../core/stage.interface";
 import { Job } from "../../../models/job.model";
 import { loadInstanceConfig } from "../../../core/instance-config";
-import { postToSlack } from "../../../core/slack-client";
+import { postToSlack } from "../../../adapters/slack/client";
 import { logger } from "../../../core/logger";
 import { SummaryOutput } from "./03-summary.stage";
 
