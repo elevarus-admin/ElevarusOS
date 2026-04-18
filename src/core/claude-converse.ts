@@ -14,7 +14,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config";
 import { logger } from "./logger";
 import { getClaudeClient } from "./claude-client";
-import { QATool, QAToolContext, executeQATool } from "./qa-tools";
+import { QATool, QAToolContext, executeQAToolFromList } from "./qa-tools";
 
 // ─── Single-turn (Phase 2) ────────────────────────────────────────────────────
 
@@ -169,7 +169,7 @@ export async function claudeConverseWithTools(
     // Execute every tool_use block from this turn, collect tool_results.
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const use of toolUses) {
-      const result = await executeQATool(use.name, use.input, opts.toolContext);
+      const result = await executeQAToolFromList(opts.tools, use.name, use.input, opts.toolContext);
       toolCalls.push({ name: use.name, input: use.input, result });
 
       logger.debug("claude-converse: tool executed", {

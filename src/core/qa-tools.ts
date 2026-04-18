@@ -20,6 +20,10 @@ import { loadInstanceConfig, listInstanceIds } from "./instance-config";
 import { WorkflowRegistry } from "./workflow-registry";
 import { IJobStore } from "./job-store";
 import { logger } from "./logger";
+import {
+  describeIntegrations,
+  getIntegrationTools,
+} from "./integration-registry";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +41,16 @@ export interface ToolSpec {
 export interface QAToolContext {
   jobStore: IJobStore;
   registry: WorkflowRegistry;
+  /**
+   * Optional Slack context — populated by slack-events when the tool is
+   * invoked during a Slack conversation. Not set for CLI-driven calls
+   * (e.g. scripts/ask.ts). Data-access tools use this for audit logging.
+   */
+  slack?: {
+    userId?:    string;
+    channelId?: string;
+    traceId?:   string;
+  };
 }
 
 export interface QATool {
@@ -155,27 +169,11 @@ const listIntegrationsTool: QATool = {
   spec: {
     name: "list_integrations",
     description:
-      "List the third-party data sources any workflow can read from (ringba, leadsprosper, meta). Returns each integration's id, purpose, and runtime configuration state.",
+      "List every third-party data source registered in ElevarusOS via the integration registry. Returns each integration's id, name, description, runtime configuration state, owned Supabase tables, and contributed live-query tools. New integrations added via src/integrations/<name>/manifest.ts appear here automatically.",
     input_schema: { type: "object", properties: {} },
   },
   async execute() {
-    return [
-      {
-        id:      "ringba",
-        summary: "Call-tracking revenue, paid calls, campaign performance. Supabase-backed.",
-        configured: Boolean(process.env.RINGBA_API_KEY && process.env.RINGBA_ACCOUNT_ID),
-      },
-      {
-        id:      "leadsprosper",
-        summary: "Lead routing + attribution. Sync worker pulls leads into Supabase every 15 min.",
-        configured: Boolean(process.env.LEADSPROSPER_API_KEY),
-      },
-      {
-        id:      "meta",
-        summary: "Meta Ads spend, impressions, CPL. Live-API for P&L reporting.",
-        configured: Boolean(process.env.META_ACCESS_TOKEN),
-      },
-    ];
+    return describeIntegrations();
   },
 };
 
@@ -488,15 +486,21 @@ export const QA_TOOLS: QATool[] = [
 ];
 
 /**
- * Execute a tool by name. Catches errors and returns a JSON-serializable
- * error object so the agent loop can keep running without crashing.
+ * Execute a tool by name from a specific tool list. The claude-converse loop
+ * calls this with the same tools it advertised to Claude, so callers can
+ * compose QA_TOOLS with adapter-specific tool sets (e.g. DATA_TOOLS from
+ * src/adapters/slack/) without touching core.
+ *
+ * Catches errors and returns a JSON-serializable error object so the agent
+ * loop keeps running.
  */
-export async function executeQATool(
+export async function executeQAToolFromList(
+  tools:  QATool[],
   name:   string,
   input:  unknown,
   ctx:    QAToolContext,
 ): Promise<unknown> {
-  const tool = QA_TOOLS.find((t) => t.spec.name === name);
+  const tool = tools.find((t) => t.spec.name === name);
   if (!tool) return { error: `Unknown tool: ${name}` };
 
   try {
@@ -505,4 +509,17 @@ export async function executeQATool(
     logger.error("qa-tools: execution failed", { tool: name, error: String(err) });
     return { error: `Tool ${name} threw: ${String(err)}` };
   }
+}
+
+/**
+ * Backwards-compatible wrapper that dispatches against the built-in QA_TOOLS
+ * list only. Retained for callers that don't need adapter-contributed tools
+ * (e.g. scripts/ask.ts when run against the bare catalog).
+ */
+export async function executeQATool(
+  name:   string,
+  input:  unknown,
+  ctx:    QAToolContext,
+): Promise<unknown> {
+  return executeQAToolFromList(QA_TOOLS, name, input, ctx);
 }

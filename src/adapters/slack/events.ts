@@ -27,6 +27,8 @@ import { buildKnowledgeCatalog } from "../../core/knowledge-catalog";
 import { WorkflowRegistry } from "../../core/workflow-registry";
 import { IJobStore } from "../../core/job-store";
 import { QA_TOOLS, claudeWantsBroadcast } from "../../core/qa-tools";
+import { getIntegrationTools } from "../../core/integration-registry";
+import { DATA_TOOLS } from "./data-tools";
 import {
   fetchChannelContext,
   renderContextBlock,
@@ -299,12 +301,17 @@ async function respond(args: {
     });
 
     const catalog = buildKnowledgeCatalog({ registry: deps.registry });
+    const tools   = [...QA_TOOLS, ...DATA_TOOLS, ...getIntegrationTools()];
     const result  = await claudeConverseWithTools({
       system:        buildSystemPrompt(catalog, context),
       userMessage:   question,
       traceId,
-      tools:         QA_TOOLS,
-      toolContext:   { jobStore: deps.jobStore, registry: deps.registry },
+      tools,
+      toolContext:   {
+        jobStore: deps.jobStore,
+        registry: deps.registry,
+        slack:    { userId: askerUserId, channelId: channel, traceId },
+      },
       maxIterations: maxToolIterations(),
     });
 
@@ -369,20 +376,31 @@ function buildSystemPrompt(catalog: string, context?: ChannelContext): string {
     catalog,
     "",
     "## Tools available",
-    "You have tools for live, drill-down state. Prefer calling a tool over guessing or relying on the static catalog above:",
+    "You have tools for live, drill-down state. Prefer calling a tool over guessing or relying on the static catalog above.",
+    "",
+    "**Orientation (pick these first for 'what/who/how' questions):**",
     "- `list_instances` / `get_instance_detail` — bot configuration + mission text",
     "- `list_workflows` — registered workflow types and stage order",
-    "- `list_integrations` — integration catalog with runtime configured/unconfigured state",
-    "- `query_jobs` — recent job runs, filterable by instance or status",
-    "- `get_job_output` — full stage outputs for one job",
-    "- `get_ringba_revenue` — live Ringba call/revenue metrics for a campaign",
-    "- `get_meta_spend` — live Meta Ads spend for an instance",
+    "- `list_integrations` — all registered integrations (auto-discovered from the integration registry) with runtime configured/unconfigured state and the Supabase tables they own",
+    "- `describe_schema` — introspect Supabase tables/columns available to `supabase_query`. Call this BEFORE writing a supabase_query if you're unsure about column names.",
+    "",
+    "**Data access (preferred path for any 'numbers' question — revenue, volume, CPL, counts, trends):**",
+    "- `supabase_query` — parametric SELECT against whitelisted tables (ringba_calls, lp_leads, jobs, etc.). Supports filters, groupBy, aggregations (sum/count/avg/min/max), orderBy, limit. **This is the workhorse — reach for it first for ad-hoc data questions.** Default cap 2000 rows; surface `truncated: true` to the user and offer to narrow.",
+    "- `ringba_live_query` — live Ringba REST API. Use ONLY when (a) the user explicitly asks for fresh-within-minutes data, (b) you need a field that isn't in `ringba_calls`, or (c) `supabase_query` has confirmed the data is missing. Otherwise prefer `supabase_query` — it's faster and audited.",
+    "- `list_ringba_publishers` / `list_ringba_campaigns` / `list_lp_campaigns` — helper lookups to resolve fuzzy user references like \"the CHP publisher\" to the exact string stored in the DB. Call these when a filter value isn't obvious.",
+    "",
+    "**Existing narrow-scope tools (use only when they exactly match the question):**",
+    "- `query_jobs` / `get_job_output` — workflow run history",
+    "- `get_ringba_revenue` — simple instance-bound revenue rollup (use `supabase_query` for anything with multiple campaigns, publishers, or custom filters)",
+    "- `get_meta_spend` — simple instance-bound Meta spend",
     "- `broadcast_reply` — reply is also posted to the main channel (see rule below)",
     "",
     "Rules of thumb:",
-    "- For anything time-sensitive (\"did today's run go?\", \"what was CPL last week?\"), call a tool.",
-    "- You can chain tools — e.g. `query_jobs` then `get_job_output` on the latest id.",
-    "- If a tool returns `{ error: ... }`, tell the user what's missing rather than guessing.",
+    "- For any data question with filters on publisher, buyer, supplier, multiple campaigns, or custom date ranges — use `supabase_query`, NOT the narrow wrapper tools.",
+    "- For revenue queries on `ringba_calls`, always filter `has_payout = true AND is_duplicate = false` unless the user asks otherwise.",
+    "- You can chain tools — e.g. `describe_schema` → `supabase_query`, or `query_jobs` → `get_job_output`.",
+    "- If a tool returns `{ error: ... }`, tell the user what's missing rather than guessing. Many errors include `hint:` fields with close-match column suggestions — use them.",
+    "- If `supabase_query` returns `truncated: true`, surface the total and ask the user to narrow the filter (or offer the top-N with that cap).",
     "",
     "## Thread vs channel (broadcast)",
     "By default, reply ONLY in the thread you were mentioned in. Call the `broadcast_reply` tool ONLY when the user explicitly asks for the answer to also appear in the main channel — e.g. \"also post in the channel\", \"send this to the channel too\", \"broadcast this\", \"share with the room\". Do not call it based on your own judgement about how useful the answer is — the asker decides. Never broadcast for DMs. Write your actual reply text as usual; the broadcast tool just signals the posting layer.",

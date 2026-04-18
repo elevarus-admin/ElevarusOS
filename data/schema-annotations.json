@@ -1,0 +1,80 @@
+{
+  "_meta": {
+    "description": "Core ElevarusOS tables (not integration-owned). Integration tables live in each src/integrations/<name>/manifest.ts and are merged at boot by src/core/integration-registry.ts. Consumed by data-tools.ts describe_schema and the supabase_query whitelist."
+  },
+  "jobs": {
+    "description": "One row per orchestrated workflow job (blog, report, etc.). Stage history, status, and approval state all live here.",
+    "columns": {
+      "id":             "Primary key — job UUID.",
+      "workflow_type":  "Workflow id / instance id (e.g. 'final-expense-reporting', 'elevarus-blog').",
+      "status":         "queued | running | awaiting_approval | approved | failed | completed.",
+      "request":        { "description": "Full job request JSONB (title, brief, audience, keyword, cta, etc.).", "type": "jsonb" },
+      "stages":         { "description": "Array of StageRecord objects — ordered by execution. Heavy.", "type": "jsonb" },
+      "approval":       { "description": "ApprovalState JSONB { required, approved, approvedBy, approvedAt, notes }.", "type": "jsonb" },
+      "publish_record": { "description": "Optional PublishRecord JSONB.", "type": "jsonb" },
+      "error":          "Top-level error message (populated when status='failed').",
+      "created_at":     { "description": "Job creation timestamp.",  "type": "timestamptz" },
+      "updated_at":     { "description": "Last state change.",       "type": "timestamptz" },
+      "completed_at":   { "description": "Completion timestamp (null if not done).", "type": "timestamptz" }
+    }
+  },
+  "instances": {
+    "description": "Snapshot of every bot instance config, synced from src/instances/<id>/instance.md at ElevarusOS startup.",
+    "columns": {
+      "id":            "Instance id (matches directory name).",
+      "name":          "Human-readable instance name.",
+      "base_workflow": "Base workflow type (e.g. 'ppc-campaign-report').",
+      "enabled":       "Whether the instance is active.",
+      "brand":         { "description": "InstanceBrand JSONB { voice, audience, tone, industry }.", "type": "jsonb" },
+      "notify":        { "description": "InstanceNotify JSONB { approver, slackChannel }.",         "type": "jsonb" },
+      "schedule":      { "description": "InstanceSchedule JSONB { enabled, cron, description }.",   "type": "jsonb" },
+      "synced_at":     { "description": "When the instance config was last synced from disk.",      "type": "timestamptz" }
+    }
+  },
+  "job_stages_view": {
+    "description": "Denormalized view of the jobs.stages JSONB array — one row per stage run. Use this for stage-level analytics ('which stage fails most?') without loading full job objects. Stage outputs are NOT included — join to jobs.stages for outputs.",
+    "columns": {
+      "job_id":         "FK to jobs.id.",
+      "workflow_type":  "Workflow / instance id.",
+      "job_status":     "Parent job status.",
+      "job_created_at": { "description": "When the parent job was created.", "type": "timestamptz" },
+      "stage_index":    "Ordinal position of this stage within the job (1-based).",
+      "stage_name":     "Stage name (e.g. 'research', 'draft', 'approval_notify').",
+      "stage_status":   "pending | running | completed | failed | skipped.",
+      "attempts":       "Retry count for this stage.",
+      "started_at":     { "description": "When the stage started.",   "type": "timestamptz" },
+      "completed_at":   { "description": "When the stage finished.",  "type": "timestamptz" },
+      "error":          "Stage-level error message (if any). Internal use only.",
+      "has_output":     "True if the stage produced output (fetch via jobs.stages for the body)."
+    }
+  },
+  "instance_job_summary": {
+    "description": "Rollup view — per-instance job counts (total, completed, failed, active) + last run timestamps. Good for dashboard cards and quick health checks.",
+    "columns": {
+      "instance_id":       "Instance / workflow id.",
+      "total_jobs":        "All-time job count.",
+      "completed":         "Jobs with status='completed'.",
+      "failed":            "Jobs with status='failed'.",
+      "active":            "Jobs in status in ('running','awaiting_approval').",
+      "last_job_at":       { "description": "Most recent job creation.",    "type": "timestamptz" },
+      "last_completed_at": { "description": "Most recent completion.",      "type": "timestamptz" }
+    }
+  },
+  "ask_elevarus_queries": {
+    "description": "Audit log for every Slack Q&A tool invocation. Useful for debugging tool selection, latency, error patterns, and per-user query volume.",
+    "columns": {
+      "id":               "Primary key.",
+      "tool_name":        "Which Q&A tool was called.",
+      "params":           { "description": "Input params passed to the tool. Heavy.", "type": "jsonb" },
+      "status":           "ok | capped | error.",
+      "row_count":        "Rows returned to Claude.",
+      "total_available":  "Rows the underlying query would have returned (for capped queries).",
+      "elapsed_ms":       "End-to-end tool execution time.",
+      "error_message":    "Error detail (if status='error').",
+      "slack_user_id":    "Slack user who triggered the tool.",
+      "slack_channel_id": "Slack channel the event came from.",
+      "trace_id":         "Correlation id (matches the Slack event_id when available).",
+      "created_at":       { "description": "When the tool was invoked.", "type": "timestamptz" }
+    }
+  }
+}

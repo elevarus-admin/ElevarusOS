@@ -20,28 +20,13 @@ import * as path from "path";
 import { INSTANCES_DIR } from "./prompt-loader";
 import { loadInstanceConfig, listInstanceIds } from "./instance-config";
 import { WorkflowRegistry } from "./workflow-registry";
+import { describeIntegrations } from "./integration-registry";
 
 /**
  * Max characters pulled from each instance's MISSION.md. Keeps the catalog
  * compact — the bot can read more via tools in later phases if needed.
  */
 const MISSION_EXCERPT_CHARS = 600;
-
-/** Integration catalog entries. Descriptions match docs/integrations.md. */
-const INTEGRATIONS: Array<{ id: string; summary: string }> = [
-  {
-    id:      "ringba",
-    summary: "Call-tracking revenue, paid calls, campaign performance. Supabase-backed.",
-  },
-  {
-    id:      "leadsprosper",
-    summary: "Lead routing + attribution data. Sync worker pulls leads into Supabase every 15 min.",
-  },
-  {
-    id:      "meta",
-    summary: "Meta Ads spend, impressions, CPL. Live-API for P&L reporting.",
-  },
-];
 
 export interface KnowledgeCatalogOptions {
   /** Authoritative list of registered workflow types + stages. */
@@ -149,9 +134,14 @@ function renderWorkflows(registry: WorkflowRegistry): string {
 // ─── Integrations ─────────────────────────────────────────────────────────────
 
 function renderIntegrations(): string {
+  const entries = describeIntegrations();
+  if (entries.length === 0) {
+    return "## Integrations\n\n_No integrations registered._";
+  }
   const lines: string[] = ["## Integrations"];
-  for (const entry of INTEGRATIONS) {
-    lines.push(`- **${entry.id}** — ${entry.summary}`);
+  for (const e of entries) {
+    const tables = e.tables.length > 0 ? ` · tables: ${e.tables.join(", ")}` : "";
+    lines.push(`- **${e.id}** (${e.status}) — ${e.description}${tables}`);
   }
   return lines.join("\n");
 }

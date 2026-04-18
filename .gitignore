@@ -1,7 +1,9 @@
 node_modules/
 dist/
 .env
-data/
+data/*
+# Except config/annotation files shipped with the code
+!data/schema-annotations.json
 
 # Dashboard submodule runtime files (not tracked in ElevarusOS repo)
 dashboard/.env
