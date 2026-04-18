@@ -8,3 +8,6 @@ dashboard/.env
 dashboard/.data/
 dashboard/.next/
 dashboard/node_modules/
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
