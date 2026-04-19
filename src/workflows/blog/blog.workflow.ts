@@ -19,7 +19,7 @@ const BOT_MD = path.join(__dirname, "bot.md");
 /**
  * Builds a blog WorkflowDefinition for the given bot instance.
  *
- * `instanceId` must match a directory under src/instances/ that has:
+ * `instanceId` must match a directory under src/agents/ that has:
  *   - instance.md with baseWorkflow: blog
  *
  * The workflowType on the registered definition equals the instanceId,

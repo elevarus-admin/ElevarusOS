@@ -73,6 +73,15 @@ export const manifest: IntegrationManifest = {
 
   liveTools: [],
 
+  features: [
+    "Lead routing and attribution",
+    "Buyer acceptance and rejection tracking",
+    "Cost vs revenue analysis",
+    "Supplier performance metrics",
+    "Phone-normalized join to Ringba calls",
+    "Supabase sync (15-minute cadence)",
+  ],
+
   systemPromptBlurb:
     "LeadsProsper data lives in `lp_leads` (one row per lead, with status, cost, revenue, supplier, and phone_normalized for joining to ringba_calls). " +
     "Most questions should use `supabase_query` — filter out is_test=true and status='ERROR' for clean lead metrics.",

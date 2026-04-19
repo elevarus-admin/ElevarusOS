@@ -14,7 +14,7 @@ export interface SummaryOutput {
   alertLevel:     "green" | "yellow" | "red";
 }
 
-const INSTANCES_DIR = path.resolve(__dirname, "../../../instances");
+const INSTANCES_DIR = path.resolve(__dirname, "../../../agents");
 
 /**
  * Stage 3 — Summary

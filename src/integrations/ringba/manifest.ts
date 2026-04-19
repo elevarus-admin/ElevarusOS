@@ -85,6 +85,15 @@ export const manifest: IntegrationManifest = {
 
   liveTools: [ringbaLiveQueryTool, ringbaTagRollupTool, ringbaTagTimeseriesTool],
 
+  features: [
+    "Call-tracking revenue & paid call metrics",
+    "Publisher attribution",
+    "Campaign performance rollups",
+    "Tag-based traffic source analysis",
+    "Supabase sync (15-minute cadence)",
+    "Live API query tools",
+  ],
+
   systemPromptBlurb:
     "Ringba data lives in `ringba_calls` (one row per call with publisher_name, campaign_name, payout_amount, call_dt, has_payout, is_duplicate). " +
     "For revenue rollups prefer `supabase_query` with filters `has_payout = true AND is_duplicate = false` and aggregations on `payout_amount`. " +

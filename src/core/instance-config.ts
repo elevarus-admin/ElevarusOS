@@ -91,7 +91,7 @@ export interface InstanceSchedule {
 }
 
 /**
- * Parsed config for one named bot instance (from src/instances/<id>/instance.md).
+ * Parsed config for one named bot instance (from src/agents/<id>/instance.md).
  *
  * A bot instance is a named, configured deployment of a base workflow.
  * All instances share the same workflow logic; instance configs control:
@@ -127,7 +127,7 @@ export interface InstanceConfig {
 
 /**
  * Loads the InstanceConfig for a given bot instance ID.
- * Reads from `src/instances/<instanceId>/instance.md`.
+ * Reads from `src/agents/<instanceId>/instance.md`.
  */
 export function loadInstanceConfig(instanceId: string): InstanceConfig {
   const instanceMdPath = path.join(INSTANCES_DIR, instanceId, "instance.md");
@@ -204,7 +204,7 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
 }
 
 /**
- * Returns all instance IDs that have an instance.md under src/instances/.
+ * Returns all instance IDs that have an instance.md under src/agents/.
  * Skips _template and disabled instances by default.
  */
 export function listInstanceIds(includeDisabled = false): string[] {

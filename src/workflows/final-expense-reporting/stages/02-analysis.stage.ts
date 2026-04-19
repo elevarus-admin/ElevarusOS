@@ -30,7 +30,7 @@ export interface AnalysisOutput {
   alertLevel: "green" | "yellow" | "red";
 }
 
-const INSTANCES_DIR = path.resolve(__dirname, "../../../instances");
+const INSTANCES_DIR = path.resolve(__dirname, "../../../agents");
 
 /**
  * Stage 2 — Analysis
@@ -43,8 +43,8 @@ const INSTANCES_DIR = path.resolve(__dirname, "../../../instances");
  * ElevarusOS only provides the data and the delivery mechanism.
  *
  * Instruction priority:
- *   1. src/instances/{instanceId}/MISSION.md  ← MC agent workspace (primary)
- *   2. src/instances/{instanceId}/soul.md     ← agent identity (secondary)
+ *   1. src/agents/{instanceId}/MISSION.md  ← MC agent workspace (primary)
+ *   2. src/agents/{instanceId}/soul.md     ← agent identity (secondary)
  *   3. Generic fallback if neither exists
  */
 export class AnalysisStage implements IStage {

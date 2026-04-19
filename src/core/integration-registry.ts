@@ -64,6 +64,8 @@ export interface IntegrationManifest {
   systemPromptBlurb: string;
   /** Optional example questions for few-shot hints. */
   exampleQuestions?: string[];
+  /** Human-readable feature list for dashboard integration cards. */
+  features?: string[];
 }
 
 // ─── Manifest imports (one line per integration) ──────────────────────────────

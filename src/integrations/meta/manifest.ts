@@ -20,6 +20,13 @@ export const manifest: IntegrationManifest = {
 
   liveTools: [],
 
+  features: [
+    "Meta (Facebook) Ads spend reporting",
+    "Impressions, clicks, CTR, CPC, and CPM metrics",
+    "Ad account and campaign breakdowns",
+    "Live Graph API (no Supabase cache yet)",
+  ],
+
   systemPromptBlurb:
     "Meta Ads data is NOT in Supabase. Use the existing `get_meta_spend` tool (resolves from instance config) for simple instance-bound queries, " +
     "or the forthcoming `meta_query` tool for arbitrary ad account / breakdown / date-range queries.",

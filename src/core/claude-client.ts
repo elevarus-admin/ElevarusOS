@@ -1,8 +1,26 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config";
 import { logger } from "./logger";
+import { makeUsage, addUsage, TokenUsage } from "./model-pricing";
 
 let _client: Anthropic | undefined;
+
+// ─── Module-level session token accumulator ───────────────────────────────────
+// Accumulated across all claudeJSON calls within a job. Reset at the start of
+// each stage run via getAndResetUsage() called by the orchestrator.
+
+let _sessionUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
+
+/**
+ * Returns the accumulated token usage since the last reset, then resets the
+ * accumulator to zero. Call this after each stage completes to get per-stage
+ * usage without double-counting.
+ */
+export function getAndResetUsage(): TokenUsage {
+  const u = { ..._sessionUsage };
+  _sessionUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
+  return u;
+}
 
 export function getClaudeClient(): Anthropic {
   if (!_client) {
@@ -34,6 +52,15 @@ export async function claudeJSON<T>(
     system: systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
   });
+
+  // Accumulate token usage into the module-level session accumulator
+  const callUsage = makeUsage(
+    config.anthropic.model,
+    message.usage.input_tokens,
+    message.usage.output_tokens
+  );
+  _sessionUsage = addUsage(_sessionUsage, callUsage);
+  logger.debug("Claude token usage", { jobId, ...callUsage });
 
   const textBlock = message.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {

@@ -53,8 +53,12 @@ import {
   SlackEventEnvelope,
 } from "../adapters/slack/events";
 import { config } from "../config";
+import { manifest as ringbaManifest }  from "../integrations/ringba/manifest";
+import { manifest as lpManifest }      from "../integrations/leadsprosper/manifest";
+import { manifest as clickupManifest } from "../integrations/clickup/manifest";
+import { manifest as metaManifest }    from "../integrations/meta/manifest";
 
-const INSTANCES_DIR = path.resolve(__dirname, "../instances");
+const AGENTS_DIR = path.resolve(__dirname, "../agents");
 
 export interface ApiServerOptions {
   port:          number;
@@ -142,6 +146,7 @@ export class ApiServer {
     r.post("/api/jobs",                   this.handleAsync(this.submitJob.bind(this)));
     r.post("/api/jobs/:jobId/approve",    this.handleAsync(this.approveJob.bind(this)));
     r.post("/api/jobs/:jobId/reject",     this.handleAsync(this.rejectJob.bind(this)));
+    r.post("/api/jobs/:jobId/cancel",     this.handleAsync(this.cancelJob.bind(this)));
 
     // ── Schedule ─────────────────────────────────────────────────────────────
     r.get("/api/schedule",     this.handleAsync(this.getSchedule.bind(this)));
@@ -149,6 +154,20 @@ export class ApiServer {
     // ── Instances ────────────────────────────────────────────────────────────
     r.get("/api/instances",    this.handleAsync(this.listInstances.bind(this)));
     r.post("/api/instances",   this.handleAsync(this.createInstance.bind(this)));
+
+    // ── Analytics ─────────────────────────────────────────────────────────────
+    r.get("/api/analytics/tokens", this.handleAsync(this.getTokenAnalytics.bind(this)));
+
+    // ── Integrations ──────────────────────────────────────────────────────────
+    r.get("/api/integrations", this.handleAsync(this.getIntegrations.bind(this)));
+
+    // ── File editor (agents + workflows .md files) ────────────────────────────
+    r.get("/api/files", this.handleAsync(this.readFile.bind(this)));
+    r.put("/api/files", this.handleAsync(this.writeFile.bind(this)));
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+    r.get("/api/settings",        this.handleAsync(this.getSettings.bind(this)));
+    r.put("/api/settings/:key",   this.handleAsync(this.updateSetting.bind(this)));
 
     // ── Data APIs — callable by MC agents as tools ────────────────────────────
     // MC agents call these to fetch data they can't get natively.
@@ -568,7 +587,7 @@ export class ApiServer {
           brand:        cfg.brand,
           notify:       cfg.notify,
           schedule:     cfg.schedule,
-          instanceDir:  path.join(INSTANCES_DIR, id),
+          instanceDir:  path.join(AGENTS_DIR, id),
         };
       } catch {
         return { id, error: "config unavailable" };
@@ -613,7 +632,7 @@ export class ApiServer {
       return;
     }
 
-    const instanceDir = path.join(INSTANCES_DIR, id);
+    const instanceDir = path.join(AGENTS_DIR, id);
     if (fs.existsSync(instanceDir)) {
       res.status(409).json({ error: `Instance "${id}" already exists` });
       return;
@@ -977,6 +996,196 @@ export class ApiServer {
       logger.error("POST /api/actions/slack error", { error: String(err) });
       res.status(500).json({ error: "Failed to post to Slack" });
     }
+  }
+
+  // ─── Cancel job ──────────────────────────────────────────────────────────────
+
+  private async cancelJob(req: Request, res: Response): Promise<void> {
+    const jobId = String(req.params.jobId);
+    if (!this.options.orchestrator) {
+      res.status(503).json({ error: "Orchestrator not available" });
+      return;
+    }
+    const result = await this.options.orchestrator.cancelJob(jobId);
+    if (!result.cancelled) {
+      res.status(409).json({ error: result.error ?? "Cannot cancel job" });
+      return;
+    }
+    res.json({ cancelled: true, jobId });
+  }
+
+  // ─── Token analytics ─────────────────────────────────────────────────────────
+
+  private async getTokenAnalytics(req: Request, res: Response): Promise<void> {
+    const days = Math.min(parseInt(String(req.query.days ?? "30"), 10), 365);
+    const instanceId = req.query.instanceId as string | undefined;
+
+    // Compute from in-memory job store (works without Supabase)
+    const allJobs = await this.options.jobStore.list();
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const jobs = allJobs.filter(j => {
+      if (j.createdAt < cutoff) return false;
+      if (!["completed", "failed", "rejected"].includes(j.status)) return false;
+      if (instanceId && j.workflowType !== instanceId) return false;
+      return true;
+    });
+
+    // Aggregate totals
+    const totals = jobs.reduce((acc, j) => {
+      const u = j.totalUsage;
+      if (!u) return acc;
+      return {
+        inputTokens:      acc.inputTokens  + u.inputTokens,
+        outputTokens:     acc.outputTokens + u.outputTokens,
+        totalTokens:      acc.totalTokens  + u.totalTokens,
+        estimatedCostUsd: acc.estimatedCostUsd + u.estimatedCostUsd,
+      };
+    }, { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0 });
+
+    // By day
+    const byDayMap = new Map<string, { inputTokens: number; outputTokens: number; costUsd: number; jobCount: number }>();
+    for (const j of jobs) {
+      const day = j.createdAt.slice(0, 10);
+      const existing = byDayMap.get(day) ?? { inputTokens: 0, outputTokens: 0, costUsd: 0, jobCount: 0 };
+      const u = j.totalUsage;
+      byDayMap.set(day, {
+        inputTokens:  existing.inputTokens  + (u?.inputTokens  ?? 0),
+        outputTokens: existing.outputTokens + (u?.outputTokens ?? 0),
+        costUsd:      existing.costUsd      + (u?.estimatedCostUsd ?? 0),
+        jobCount:     existing.jobCount + 1,
+      });
+    }
+    const byDay = Array.from(byDayMap.entries())
+      .map(([day, v]) => ({ day, ...v }))
+      .sort((a, b) => a.day.localeCompare(b.day));
+
+    // By workflow
+    const byWorkflowMap = new Map<string, { totalTokens: number; costUsd: number; jobCount: number }>();
+    for (const j of jobs) {
+      const existing = byWorkflowMap.get(j.workflowType) ?? { totalTokens: 0, costUsd: 0, jobCount: 0 };
+      const u = j.totalUsage;
+      byWorkflowMap.set(j.workflowType, {
+        totalTokens: existing.totalTokens + (u?.totalTokens ?? 0),
+        costUsd:     existing.costUsd + (u?.estimatedCostUsd ?? 0),
+        jobCount:    existing.jobCount + 1,
+      });
+    }
+    const byWorkflow = Array.from(byWorkflowMap.entries())
+      .map(([workflowType, v]) => ({ workflowType, ...v }))
+      .sort((a, b) => b.totalTokens - a.totalTokens);
+
+    res.json({ days, totals, byDay, byWorkflow });
+  }
+
+  // ─── Integrations ─────────────────────────────────────────────────────────────
+
+  private async getIntegrations(_req: Request, res: Response): Promise<void> {
+    const manifests = [ringbaManifest, lpManifest, clickupManifest, metaManifest];
+
+    const integrations = manifests.map(m => ({
+      id:          m.id,
+      name:        m.name,
+      description: m.description,
+      enabled:     m.status() === "configured",
+      tables:      (m.supabaseTables ?? []).map(t => ({
+        name:        t.name,
+        description: t.description,
+        columns:     Object.entries(t.columns ?? {}).map(([col, def]) => ({
+          name:        col,
+          type:        typeof def === "string" ? "text" : (def as any).type ?? "text",
+          description: typeof def === "string" ? def : (def as any).description ?? "",
+        })),
+      })),
+      liveTools:   (m.liveTools ?? []).map(t => t.spec.name),
+      features:    m.features ?? [],
+    }));
+
+    // Add Slack integration manually (no manifest file yet)
+    const slackEnabled = !!(process.env.SLACK_BOT_TOKEN);
+    integrations.push({
+      id:          "slack",
+      name:        "Slack",
+      description: "Approval notifications, Block Kit buttons, and Q&A bot.",
+      enabled:     slackEnabled,
+      tables:      [],
+      liveTools:   [],
+      features:    ["Approval notifications", "Block Kit buttons", "Q&A bot"],
+    });
+
+    res.json({ integrations });
+  }
+
+  // ─── File editor ──────────────────────────────────────────────────────────────
+
+  private readonly EDITABLE_PREFIXES = [
+    path.resolve(__dirname, "../agents"),
+    path.resolve(__dirname, "../workflows"),
+  ];
+
+  private resolveEditablePath(rawPath: string): string | null {
+    if (!rawPath.endsWith(".md")) return null;
+    if (rawPath.includes("..")) return null;
+    const abs = path.resolve(__dirname, "..", rawPath.replace(/^src\//, ""));
+    const allowed = this.EDITABLE_PREFIXES.some(p => abs.startsWith(p));
+    if (!allowed) return null;
+    return abs;
+  }
+
+  private async readFile(req: Request, res: Response): Promise<void> {
+    const rawPath = String(req.query.path ?? "");
+    const abs = this.resolveEditablePath(rawPath);
+    if (!abs) {
+      res.status(400).json({ error: "Invalid or disallowed path. Only .md files under src/agents/ and src/workflows/ are accessible." });
+      return;
+    }
+    if (!fs.existsSync(abs)) {
+      res.status(404).json({ error: "File not found" });
+      return;
+    }
+    const content = fs.readFileSync(abs, "utf8");
+    const stat = fs.statSync(abs);
+    res.json({ path: rawPath, content, lastModified: stat.mtime.toISOString() });
+  }
+
+  private async writeFile(req: Request, res: Response): Promise<void> {
+    const rawPath = String(req.query.path ?? "");
+    const abs = this.resolveEditablePath(rawPath);
+    if (!abs) {
+      res.status(400).json({ error: "Invalid or disallowed path." });
+      return;
+    }
+    const { content } = req.body as { content?: string };
+    if (typeof content !== "string") {
+      res.status(400).json({ error: "body.content (string) is required" });
+      return;
+    }
+    fs.writeFileSync(abs, content, "utf8");
+    logger.info("File updated via API", { path: rawPath });
+    res.json({ success: true, path: rawPath, savedAt: new Date().toISOString() });
+  }
+
+  // ─── Settings ─────────────────────────────────────────────────────────────────
+
+  private _settings: Record<string, unknown> = {
+    alert_daily_cost_usd:   { threshold: 50,  enabled: false },
+    alert_job_failure_rate: { threshold: 20,  enabled: false },
+    display_prefs:          { showCostEstimates: true, historyPageSize: 25, dateFormat: "relative" },
+  };
+
+  private async getSettings(_req: Request, res: Response): Promise<void> {
+    res.json({ settings: this._settings });
+  }
+
+  private async updateSetting(req: Request, res: Response): Promise<void> {
+    const key = String(req.params.key);
+    const { value } = req.body as { value: unknown };
+    if (value === undefined) {
+      res.status(400).json({ error: "body.value is required" });
+      return;
+    }
+    this._settings[key] = value;
+    res.json({ key, value, updatedAt: new Date().toISOString() });
   }
 
   // ─── Utility ─────────────────────────────────────────────────────────────────

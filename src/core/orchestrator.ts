@@ -8,6 +8,9 @@ import { WorkflowRegistry } from "./workflow-registry";
 import { IJobStore } from "./job-store";
 import { logger } from "./logger";
 import { config } from "../config";
+import { approvalStore } from "./approval-store";
+import { getAndResetUsage } from "./claude-client";
+import { addUsage } from "./model-pricing";
 
 /** Minimal interface so orchestrator doesn't depend on MissionControlBridge directly */
 interface IDashboardBridge {
@@ -261,6 +264,16 @@ export class Orchestrator {
         record.status = "completed";
         record.completedAt = new Date().toISOString();
         job.updatedAt = record.completedAt;
+
+        // Capture token usage accumulated during this stage run
+        const stageUsage = getAndResetUsage();
+        if (stageUsage.totalTokens > 0) {
+          record.usage = stageUsage;
+          job.totalUsage = job.totalUsage
+            ? addUsage(job.totalUsage, stageUsage)
+            : stageUsage;
+        }
+
         await this.jobStore.save(job);
 
         logger.info("Stage completed", {
@@ -323,6 +336,27 @@ export class Orchestrator {
     await Promise.allSettled(
       this.notifiers.map((n) => n.sendFailure(job, reason))
     );
+  }
+
+  // ─── Job cancellation ─────────────────────────────────────────────────────
+
+  async cancelJob(jobId: string): Promise<{ cancelled: boolean; error?: string }> {
+    const job = await this.jobStore.get(jobId);
+    if (!job) return { cancelled: false, error: "Job not found" };
+    if (job.status === "completed" || job.status === "failed" || job.status === "rejected") {
+      return { cancelled: false, error: `Job is already ${job.status}` };
+    }
+    // If awaiting approval, unblock the promise first
+    if (job.status === "awaiting_approval") {
+      approvalStore.notifyApproval(jobId, false);
+    }
+    job.status = "failed";
+    job.error = "Cancelled by user";
+    job.updatedAt = new Date().toISOString();
+    await this.jobStore.save(job);
+    await this.bridge?.onJobUpdated(job);
+    logger.info("Job cancelled", { jobId });
+    return { cancelled: true };
   }
 
   // ─── Job access ───────────────────────────────────────────────────────────

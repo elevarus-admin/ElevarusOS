@@ -3,7 +3,7 @@ import * as path from "path";
 import { InstanceConfig, listInstanceIds, loadInstanceConfig } from "./instance-config";
 import { logger } from "./logger";
 
-const INSTANCES_DIR = path.resolve(__dirname, "../instances");
+const INSTANCES_DIR = path.resolve(__dirname, "../agents");
 
 /**
  * Workspace Scaffold

@@ -27,7 +27,7 @@
  * ADDING A NEW BOT INSTANCE
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * 1. Create src/instances/<id>/instance.md  (copy from src/instances/_template/)
+ * 1. Create src/agents/<id>/instance.md  (copy from src/agents/_template/)
  *    — OR — POST /api/instances  (creates the file)
  *
  * 2. Register it below — one line:

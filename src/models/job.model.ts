@@ -29,6 +29,12 @@ export interface StageRecord {
   error?: string;
   /** Stage-specific structured output, stored for use by downstream stages */
   output?: unknown;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+  };
 }
 
 // ─── Job ──────────────────────────────────────────────────────────────────────
@@ -62,6 +68,14 @@ export interface Job {
 
   /** Publish handoff record (populated by the publish_placeholder stage) */
   publishRecord?: PublishRecord;
+
+  /** Cumulative token usage across all stages in this job */
+  totalUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+  };
 
   /**
    * Free-form pass-through metadata carried from the originating MC task.

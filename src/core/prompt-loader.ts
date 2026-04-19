@@ -25,7 +25,7 @@ export interface PromptOptions {
   /**
    * Bot instance ID (e.g. "elevarus-blog", "nes-blog").
    * When provided, the loader checks
-   *   src/instances/{instanceId}/prompts/{filename}
+   *   src/agents/{instanceId}/prompts/{filename}
    * before falling back to the base workflow template.
    *
    * This is how per-instance prompt customisation works — create a file in
@@ -41,8 +41,8 @@ export interface PromptOptions {
   extraVars?: Record<string, string>;
 }
 
-/** Absolute path to the src/instances/ directory. */
-export const INSTANCES_DIR = path.resolve(__dirname, "../instances");
+/** Absolute path to the src/agents/ directory. */
+export const INSTANCES_DIR = path.resolve(__dirname, "../agents");
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ export const INSTANCES_DIR = path.resolve(__dirname, "../instances");
  * support and `{{PLACEHOLDER}}` substitution.
  *
  * ## Override resolution (first found wins):
- *   1. `src/instances/{instanceId}/prompts/{filename}` — instance-specific
+ *   1. `src/agents/{instanceId}/prompts/{filename}` — instance-specific
  *   2. `templatePath` — base workflow template (e.g. workflows/blog/prompts/)
  *
  * ## Variable injection (later overrides earlier):
