@@ -29,7 +29,8 @@ export type FilterOp =
   | "eq" | "neq" | "gt" | "gte" | "lt" | "lte"
   | "in" | "not_in"
   | "like" | "ilike"
-  | "is_null" | "not_null";
+  | "is_null" | "not_null"
+  | "jsonb_contains";
 
 export interface QueryFilter {
   column: string;
@@ -91,6 +92,7 @@ const ALLOWED_OPS = new Set<FilterOp>([
   "in", "not_in",
   "like", "ilike",
   "is_null", "not_null",
+  "jsonb_contains",
 ]);
 
 const ALLOWED_AGG_FNS = new Set<AggregationFn>(["sum", "count", "avg", "min", "max"]);
@@ -258,6 +260,15 @@ function applyFilter(builder: SupabaseFilterBuilder, f: QueryFilter): SupabaseFi
     case "not_in":    return builder.not(f.column, "in", `(${formatList(f.value)})`);
     case "is_null":   return builder.is(f.column, null);
     case "not_null":  return builder.not(f.column, "is", null);
+    case "jsonb_contains": {
+      if (typeof f.value !== "object" || f.value === null || Array.isArray(f.value)) {
+        throw new QueryValidationError(
+          `jsonb_contains requires an object value (got ${typeof f.value}).`,
+          `Example: { column: "tag_values", op: "jsonb_contains", value: { "User:utm_campaign": "spring_hvac" } }`,
+        );
+      }
+      return builder.contains(f.column, f.value as Record<string, unknown>);
+    }
     default:
       throw new QueryValidationError(`Unsupported filter op: "${(f as QueryFilter).op}"`);
   }
@@ -284,6 +295,7 @@ interface SupabaseFilterBuilder {
   in(col: string, v: Array<string | number | boolean>): SupabaseFilterBuilder;
   is(col: string, v: null):            SupabaseFilterBuilder;
   not(col: string, op: string, v: unknown): SupabaseFilterBuilder;
+  contains(col: string, v: Record<string, unknown>): SupabaseFilterBuilder;
   order(col: string, opts: { ascending: boolean }): SupabaseFilterBuilder;
   limit(n: number):                    SupabaseFilterBuilder;
 }

@@ -79,8 +79,17 @@ export class RingbaRepository {
         publisher_name:           winner.publisherName || null,
         recording_url:            winner.recordingUrl ?? null,
         routing_attempt_count:    attempts.length,
-        routing_attempts:         attempts,
-        raw:                      winner,
+        // `routing_attempts` preserves every attempt verbatim — using
+        // rawRecord (the full API record) when available so we keep every
+        // field Ringba returns, not just the ones in RingbaCallRecord.
+        routing_attempts:         attempts.map((a) => a.rawRecord ?? a),
+        // `raw` stores the winning attempt's full API record so ad-hoc
+        // queries can reach any field we didn't promote to a column.
+        raw:                      winner.rawRecord ?? winner,
+        // `tag_values` promotes the flattened tag map into a queryable
+        // JSONB (GIN-indexed). Populated from tag:TagType:TagName fields
+        // in the winning attempt.
+        tag_values:               winner.tagValues ?? {},
       };
     });
 

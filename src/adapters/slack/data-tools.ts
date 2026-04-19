@@ -54,7 +54,7 @@ const supabaseQueryTool: QATool = {
         filters: {
           type: "array",
           description:
-            "List of { column, op, value } filters. Ops: eq, neq, gt, gte, lt, lte, in, not_in, like, ilike, is_null, not_null. Omit `value` for is_null/not_null.",
+            "List of { column, op, value } filters. Ops: eq, neq, gt, gte, lt, lte, in, not_in, like, ilike, is_null, not_null, jsonb_contains. Omit `value` for is_null/not_null. Use jsonb_contains with an object value for JSONB columns like `tag_values` — e.g. { column: 'tag_values', op: 'jsonb_contains', value: { 'User:utm_campaign': 'spring_hvac' } } matches calls whose tag_values contains that key/value pair.",
           items: {
             type: "object",
             properties: {

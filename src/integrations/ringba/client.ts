@@ -3,7 +3,51 @@ import type {
   RingbaCallRecord,
   RingbaCampaign,
   RingbaCallLogOptions,
+  RingbaTagDefinition,
 } from "./types";
+
+/**
+ * Explicit /calllogs value columns we always want returned.
+ *
+ * The Ringba API has two modes: default (no valueColumns → returns ~50
+ * fields) and strict (valueColumns → returns ONLY those). As soon as we
+ * opt into valueColumns to get tags, we must also enumerate every base
+ * field or we lose it. This list mirrors the fields that were in the
+ * default response, plus a few extras (publisherId, publisherSubId, etc.)
+ * that we were previously dropping but want to keep.
+ */
+const BASE_VALUE_COLUMNS: readonly string[] = [
+  // Identity
+  "inboundCallId",
+  "campaignId", "campaignName",
+  "publisherId", "publisherSubId", "publisherName",
+  "targetId", "targetName",
+  "buyerId", "buyer",
+  "targetNumber", "number", "numberId",
+  "numberPoolId", "numberPoolName", "isFromNumberPool",
+  // Timing
+  "callDt", "callCompletedDt", "callConnectionDt",
+  "callLengthInSeconds", "connectedCallLengthInSeconds",
+  "timeToCallInSeconds", "timeToConnectInSeconds",
+  // Status flags
+  "hasConnected", "hasConverted", "hasPayout", "hasRecording", "hasRpcCalculation",
+  "isDuplicate", "isLive", "hasPreviouslyConnected",
+  // Reasons / meta
+  "endCallSource", "noConversionReason", "noPayoutReason", "incompleteCallReason",
+  "previouseCallDateTime", "previouseCallTargetName",
+  // Money
+  "conversionAmount", "payoutAmount", "profitNet", "profitGross",
+  "totalCost", "telcoCost", "bidAmount",
+  // Media
+  "recordingUrl",
+  // Ring tree / RTB
+  "ringTreeWinningBidTargetName", "ringTreeWinningBidTargetId",
+  "ringTreeWinningBid", "ringTreeWinningBidMinimumRevenueAmount",
+  "ringTreeWinningBidDynamicDuration",
+  "pingTotalBidAmount", "pingSuccessCount", "pingFailCount",
+  "winningBid", "winningBidCallAccepted",
+  "avgPingTreeBidAmount",
+];
 
 /**
  * Low-level Ringba REST API v2 client.
@@ -60,39 +104,98 @@ export class RingbaHttpClient {
     return campaigns.find((c) => c.name.toLowerCase() === name.toLowerCase()) ?? null;
   }
 
+  // ── Tags — discovery ───────────────────────────────────────────────────────
+
+  /** Cached tag definition list. Refreshed lazily (see listTags()). */
+  private tagCache: { at: number; tags: RingbaTagDefinition[] } | null = null;
+  /** Tag definitions are stable per account — refresh hourly is plenty. */
+  private static readonly TAG_CACHE_TTL_MS = 60 * 60 * 1000;
+
+  /**
+   * List every tag definition registered on this account. Tags are returned
+   * by type + name — the /calllogs body references them as
+   * `tag:{tagType}:{tagName}` in valueColumns.
+   *
+   * Cached to avoid hitting the endpoint on every sync tick. Set
+   * `forceRefresh: true` to bypass.
+   */
+  async listTags(forceRefresh = false): Promise<RingbaTagDefinition[]> {
+    if (!this.enabled) return [];
+    if (!forceRefresh &&
+        this.tagCache &&
+        Date.now() - this.tagCache.at < RingbaHttpClient.TAG_CACHE_TTL_MS) {
+      return this.tagCache.tags;
+    }
+    const res = await this.get("/tags");
+    const items: unknown = res;
+    const tags: RingbaTagDefinition[] = Array.isArray(items)
+      ? items
+          .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null)
+          .map((t) => ({
+            tagType:   String(t.tagType   ?? ""),
+            tagName:   String(t.tagName   ?? ""),
+            tagSource: String(t.tagSource ?? ""),
+          }))
+          .filter((t) => t.tagType && t.tagName)
+      : [];
+    this.tagCache = { at: Date.now(), tags };
+    return tags;
+  }
+
   // ── Call Logs — offset-paginated ──────────────────────────────────────────
 
   /**
    * Fetch ALL call logs for a date range via offset pagination.
    * The API caps at 20 records per request, so we loop automatically.
    * Client-side campaign filtering applied because API-side filter is unreliable.
+   *
+   * By default includes every tag discovered via `/tags` in the request so
+   * tag values (including user-defined tags like utm_campaign) land in the
+   * record's `tagValues` map.
    */
   async fetchCallLogs(opts: RingbaCallLogOptions): Promise<RingbaCallRecord[]> {
     if (!this.enabled) return [];
 
     const { startDate, endDate } = opts;
+
+    // Build valueColumns: base fields + all tags (or caller override).
+    let valueColumns: string[];
+    if (opts.valueColumns && opts.valueColumns.length > 0) {
+      valueColumns = [...opts.valueColumns];
+    } else {
+      const columns = [...BASE_VALUE_COLUMNS];
+      if (opts.includeTags !== false) {
+        const tags = await this.listTags();
+        for (const t of tags) {
+          columns.push(`tag:${t.tagType}:${t.tagName}`);
+        }
+      }
+      valueColumns = columns;
+    }
+
     const all: RingbaCallRecord[] = [];
     let offset = 0;
     let total  = Infinity;
 
     while (offset < total) {
-      const res = await this.post("/callLogs", {
+      const res = await this.post("/calllogs", {
         reportStart: `${startDate}T00:00:00`,
         reportEnd:   `${endDate}T23:59:59`,
-        page:        0,
         offset,
+        valueColumns: valueColumns.map((c) => ({ column: c })),
       });
 
       if (!res?.report) break;
 
-      const records: any[] = res.report.records ?? [];
+      const records: unknown[] = res.report.records ?? [];
       total = res.report.totalCount ?? records.length;
 
       if (records.length === 0) break;
 
-      const filtered = records.filter((r) => {
+      const filtered = (records as Record<string, unknown>[]).filter((r) => {
         if (opts.campaignId   && r.campaignId   !== opts.campaignId)   return false;
-        if (opts.campaignName && r.campaignName?.toLowerCase() !== opts.campaignName.toLowerCase()) return false;
+        if (opts.campaignName &&
+            String(r.campaignName ?? "").toLowerCase() !== opts.campaignName.toLowerCase()) return false;
         return true;
       });
 
@@ -105,29 +208,68 @@ export class RingbaHttpClient {
 
   // ── Record parser ─────────────────────────────────────────────────────────
 
-  private parseRecord = (r: any): RingbaCallRecord => ({
-    inboundCallId:                r.inboundCallId                ?? "",
-    campaignId:                   r.campaignId                   ?? "",
-    campaignName:                 r.campaignName                 ?? "",
-    inboundPhoneNumber:           r.inboundPhoneNumber           ?? "",
-    callDt:                       r.callDt                       ?? 0,
-    callLengthInSeconds:          r.callLengthInSeconds          ?? 0,
-    connectedCallLengthInSeconds: r.connectedCallLengthInSeconds ?? 0,
-    hasConnected:                 r.hasConnected                 ?? false,
-    hasConverted:                 r.hasConverted                 ?? false,
-    hasPayout:                    r.hasPayout                    ?? false,
-    noConversionReason:           r.noConversionReason           ?? null,
-    conversionAmount:             parseFloat(r.conversionAmount  ?? "0") || 0,
-    payoutAmount:                 parseFloat(r.payoutAmount      ?? "0") || 0,
-    profitNet:                    parseFloat(r.profitNet         ?? "0") || 0,
-    totalCost:                    parseFloat(r.totalCost         ?? "0") || 0,
-    buyer:                        r.buyer                        ?? null,
-    targetName:                   r.targetName                   ?? null,
-    publisherName:                r.publisherName                ?? "",
-    isDuplicate:                  r.isDuplicate                  ?? false,
-    isLive:                       r.isLive                       ?? false,
-    recordingUrl:                 r.recordingUrl                 ?? undefined,
-  });
+  /**
+   * Convert a raw /calllogs record into our RingbaCallRecord shape.
+   *
+   * - Every `tag:TagType:TagName` key is extracted into a flat `tagValues`
+   *   map keyed `"TagType:TagName"` (prefix stripped). Tags that Ringba
+   *   didn't return (empty value) are still captured as empty strings; the
+   *   sync layer drops empties when writing to Supabase.
+   * - The untouched raw record is preserved on `rawRecord` and used as the
+   *   `raw` JSONB value in the DB row — nothing silently dropped.
+   */
+  private parseRecord = (r: Record<string, unknown>): RingbaCallRecord => {
+    const tagValues: Record<string, string> = {};
+    for (const [k, v] of Object.entries(r)) {
+      if (!k.startsWith("tag:")) continue;
+      const key = k.slice(4); // strip "tag:" → "TagType:TagName"
+      if (v === null || v === undefined) continue;
+      const s = String(v);
+      if (s.length === 0) continue;
+      tagValues[key] = s;
+    }
+
+    const asStr   = (v: unknown): string => (v === null || v === undefined ? "" : String(v));
+    const asNum   = (v: unknown): number => {
+      const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+      return Number.isFinite(n) ? n : 0;
+    };
+    const asBool  = (v: unknown): boolean => v === true || v === "true";
+    const asStrOrNull = (v: unknown): string | null => {
+      if (v === null || v === undefined || v === "") return null;
+      return String(v);
+    };
+
+    return {
+      inboundCallId:                asStr(r.inboundCallId),
+      campaignId:                   asStr(r.campaignId),
+      campaignName:                 asStr(r.campaignName),
+      publisherId:                  asStr(r.publisherId)     || undefined,
+      publisherSubId:               asStr(r.publisherSubId)  || undefined,
+      publisherName:                asStr(r.publisherName),
+      targetId:                     asStr(r.targetId)        || undefined,
+      targetName:                   asStrOrNull(r.targetName),
+      buyerId:                      asStr(r.buyerId)         || undefined,
+      buyer:                        asStrOrNull(r.buyer),
+      inboundPhoneNumber:           asStr(r.inboundPhoneNumber),
+      callDt:                       typeof r.callDt === "number" ? r.callDt : asNum(r.callDt),
+      callLengthInSeconds:          asNum(r.callLengthInSeconds),
+      connectedCallLengthInSeconds: asNum(r.connectedCallLengthInSeconds),
+      hasConnected:                 asBool(r.hasConnected),
+      hasConverted:                 asBool(r.hasConverted),
+      hasPayout:                    asBool(r.hasPayout),
+      noConversionReason:           asStrOrNull(r.noConversionReason),
+      conversionAmount:             asNum(r.conversionAmount),
+      payoutAmount:                 asNum(r.payoutAmount),
+      profitNet:                    asNum(r.profitNet),
+      totalCost:                    asNum(r.totalCost),
+      isDuplicate:                  asBool(r.isDuplicate),
+      isLive:                       asBool(r.isLive),
+      recordingUrl:                 asStr(r.recordingUrl) || undefined,
+      tagValues,
+      rawRecord:                    r,
+    };
+  };
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────
 

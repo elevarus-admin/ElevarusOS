@@ -22,7 +22,7 @@ export const manifest: IntegrationManifest = {
     {
       name:        "ringba_calls",
       description:
-        "One row per inbound call to a Ringba campaign. The 'winning' routing attempt (non-duplicate, has_payout preferred) is promoted to top-level columns; all routing attempts are in the `routing_attempts` JSONB. Use has_payout=true AND is_duplicate=false for accurate revenue/paid-call metrics.",
+        "One row per inbound call to a Ringba campaign. The 'winning' routing attempt (non-duplicate, has_payout preferred) is promoted to top-level columns; all routing attempts are in the `routing_attempts` JSONB. Custom + system tag values (utm_campaign, Geo:Country, etc.) are in `tag_values` JSONB (GIN-indexed). Use has_payout=true AND is_duplicate=false for accurate revenue/paid-call metrics.",
       columns: {
         inbound_call_id:          "Primary key — Ringba inbound call ID.",
         campaign_id:              "FK to ringba_campaigns.id.",
@@ -46,8 +46,9 @@ export const manifest: IntegrationManifest = {
         publisher_name:           "Traffic source / affiliate that drove the call. Use for publisher-level attribution.",
         recording_url:            "URL to the call recording (if captured).",
         routing_attempt_count:    { description: "How many buyers the call was offered to.", type: "integer" },
-        routing_attempts:         { description: "Full JSONB array of every routing attempt. Heavy — exclude from SELECT unless needed.", type: "jsonb" },
-        raw:                      { description: "Full winning RingbaCallRecord JSONB. Heavy — exclude from SELECT unless needed.", type: "jsonb" },
+        routing_attempts:         { description: "Full JSONB array of every routing attempt (verbatim from Ringba). Heavy — exclude from SELECT unless needed.", type: "jsonb" },
+        raw:                      { description: "Full winning-attempt API record verbatim from Ringba. Heavy — exclude from SELECT unless you need a field not promoted to a column.", type: "jsonb" },
+        tag_values:               { description: "Flat map of every tag value Ringba captured for this call. Keys are 'TagType:TagName' (e.g. 'User:utm_campaign', 'User:utm_content', 'Geo:Country', 'Technology:OS'). Values are strings. GIN-indexed — use JSONB containment (tag_values @> '{\"User:utm_campaign\": \"x\"}') or `->>` for filters.", type: "jsonb" },
         synced_at:                { description: "When the sync worker wrote this row.", type: "timestamptz" },
         updated_at:               { description: "Row update timestamp.", type: "timestamptz" },
       },
