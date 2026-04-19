@@ -197,6 +197,19 @@ export class Orchestrator {
         continue;
       }
 
+      // Guard against external cancellation: re-read the job status before
+      // running each stage. If something (e.g. cancelJob()) set status to
+      // "failed" or "rejected" while a previous stage was in flight, stop here
+      // rather than overwriting it when the workflow eventually completes.
+      const freshStatus = (await this.jobStore.get(job.id))?.status;
+      if (freshStatus === "failed" || freshStatus === "rejected") {
+        logger.info("Job cancelled externally — stopping stage loop", {
+          jobId: job.id,
+          freshStatus,
+        });
+        return;
+      }
+
       // For the approval gate: set awaiting_approval BEFORE the stage runs
       // (the stage will block until the approver acts, so the status must
       // reflect "waiting" during that time, not "running")
@@ -247,6 +260,10 @@ export class Orchestrator {
     const maxAttempts = config.orchestrator.maxStageRetries + 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Discard any tokens accumulated during a previous failed attempt so we
+      // don't double-count them against the next retry.
+      getAndResetUsage();
+
       record.status = "running";
       record.startedAt = new Date().toISOString();
       record.attempts = attempt;

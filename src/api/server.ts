@@ -1118,15 +1118,17 @@ export class ApiServer {
 
   // ─── File editor ──────────────────────────────────────────────────────────────
 
+  // Use process.cwd() (repo root) rather than __dirname so that this works
+  // both under ts-node (src/api/) and from compiled output (dist/api/).
   private readonly EDITABLE_PREFIXES = [
-    path.resolve(__dirname, "../agents"),
-    path.resolve(__dirname, "../workflows"),
+    path.resolve(process.cwd(), "src/agents"),
+    path.resolve(process.cwd(), "src/workflows"),
   ];
 
   private resolveEditablePath(rawPath: string): string | null {
     if (!rawPath.endsWith(".md")) return null;
     if (rawPath.includes("..")) return null;
-    const abs = path.resolve(__dirname, "..", rawPath.replace(/^src\//, ""));
+    const abs = path.resolve(process.cwd(), rawPath);
     const allowed = this.EDITABLE_PREFIXES.some(p => abs.startsWith(p));
     if (!allowed) return null;
     return abs;
