@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import { InstanceConfig, listInstanceIds, loadInstanceConfig } from "./instance-config";
-import { MCClient } from "./mc-client";
 import { logger } from "./logger";
 
 const INSTANCES_DIR = path.resolve(__dirname, "../instances");
@@ -106,7 +105,33 @@ function buildIdentityMd(cfg: InstanceConfig): string {
 }
 
 function buildSoulMd(cfg: InstanceConfig): string {
-  return MCClient.buildSoulContent(cfg);
+  return [
+    `# ${cfg.name}`,
+    ``,
+    `**Framework:** ElevarusOS | **Workflow:** ${cfg.baseWorkflow} | **Status:** ${cfg.enabled ? "Active" : "Disabled"}`,
+    ``,
+    `## Voice & Brand`,
+    `- **Voice:** ${cfg.brand.voice}`,
+    `- **Audience:** ${cfg.brand.audience}`,
+    `- **Tone:** ${cfg.brand.tone}`,
+    cfg.brand.industry ? `- **Industry:** ${cfg.brand.industry}` : "",
+    ``,
+    `## Notifications`,
+    cfg.notify.approver     ? `- **Approver:** ${cfg.notify.approver}`   : "",
+    cfg.notify.slackChannel ? `- **Slack:** ${cfg.notify.slackChannel}` : "",
+    ``,
+    cfg.schedule.enabled
+      ? [
+          `## Schedule`,
+          `- **Cron:** \`${cfg.schedule.cron}\``,
+          cfg.schedule.description ? `- **Description:** ${cfg.schedule.description}` : "",
+        ].filter(Boolean).join("\n")
+      : "",
+  ]
+    .filter((l) => l !== undefined)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function buildMissionMd(cfg: InstanceConfig): string {
@@ -251,7 +276,7 @@ function buildWorkingMd(cfg: InstanceConfig): string {
     ``,
     `## Current Task`,
     ``,
-    `_(None — updated by MCWorker during workflow execution)_`,
+    `_(None — updated by the Orchestrator during workflow execution)_`,
     ``,
     `## Stage Progress`,
     ``,
@@ -325,7 +350,7 @@ export function scaffoldInstanceWorkspace(cfg: InstanceConfig, force = false): v
 
 /**
  * Scaffold workspace files for all registered instances.
- * Called at startup by MCWorker after agent registration.
+ * Called at startup to ensure all instance workspace files exist.
  */
 export function scaffoldAllWorkspaces(force = false): void {
   const ids = listInstanceIds(true);

@@ -70,16 +70,13 @@ All five variables must be set to enable the Microsoft Graph email adapter. The 
 
 ---
 
-## Mission Control
+## Dashboard
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MISSION_CONTROL_URL` | Optional | `http://localhost:3000` | Base URL of the Mission Control dashboard. Set to the local dev URL or your production MC URL |
-| `MISSION_CONTROL_API_KEY` | Optional | — | API key for authenticating requests to MC. Sent as `x-api-key`. When absent, `MCClient.enabled` is `false` and daemon mode is disabled |
-| `MC_WEBHOOK_SECRET` | Optional | — | Shared secret for HMAC-SHA256 verification of inbound MC webhook payloads. Set the same value here and in the webhook registered in MC. When absent, signature verification is skipped (acceptable for local development only) |
-| `ELEVARUS_PUBLIC_URL` | Optional | — | Public URL where ElevarusOS is reachable (e.g. `https://your-domain.com`). Used to register `/api/webhooks/mc` with MC on startup. Leave blank for local dev — approval webhooks will not auto-unblock workflows without it. Docker users: `http://host.docker.internal:3001` |
+| `CORS_ORIGINS` | Optional | `http://localhost:3000` | Comma-separated list of origins the API allows CORS requests from. Set to `*` to allow all origins (not recommended in production). The dashboard at port 3000 is included by default |
 
-`MISSION_CONTROL_URL` and `MISSION_CONTROL_API_KEY` must both be set to enable daemon mode. When either is missing, MCWorker logs an info message and skips all MC interactions — ElevarusOS falls back to direct mode (`--once`).
+> Dashboard-specific environment variables (Supabase keys, `ELEVARUS_API_SECRET`) are set in `dashboard/.env.local` — see `dashboard/README.md` for details.
 
 ---
 
@@ -88,7 +85,7 @@ All five variables must be set to enable the Microsoft Graph email adapter. The 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `API_PORT` | Optional | `3001` | TCP port the ElevarusOS REST API server listens on |
-| `API_SECRET` | Optional | — | When set, all API requests (except `POST /api/webhooks/mc`) must include `x-api-key: <API_SECRET>`. When absent, the API is unauthenticated |
+| `API_SECRET` | Optional | — | When set, all API requests (except webhook routes) must include `x-api-key: <API_SECRET>`. When absent, the API is unauthenticated |
 
 ---
 
@@ -96,7 +93,7 @@ All five variables must be set to enable the Microsoft Graph email adapter. The 
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `POLL_INTERVAL_MS` | Optional | `60000` | Milliseconds between MCWorker poll cycles. Lower values increase MC API traffic; higher values add latency before a task starts |
+| `POLL_INTERVAL_MS` | Optional | `60000` | Reserved — not currently used. Left for forward compatibility |
 | `MAX_STAGE_RETRIES` | Optional | `2` | Maximum number of retries per workflow stage on failure. Total attempts = `MAX_STAGE_RETRIES + 1`. Retries use exponential backoff (2s, 4s) |
 | `LOG_LEVEL` | Optional | `info` | Logging verbosity. One of `debug`, `info`, `warn`, `error` |
 | `JOB_STORE` | Optional | `memory` | Job persistence backend. `memory` = lost on restart. `file` = persisted to `JOB_STORE_PATH`. `supabase` = persisted to Supabase (requires `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`) |
@@ -144,7 +141,7 @@ MS_CLIENT_SECRET=
 MS_INTAKE_MAILBOX=content-requests@yourdomain.com
 MS_NOTIFY_FROM=no-reply@yourdomain.com
 
-# ─── Slack (optional — enables Slack notifications) ───────────────────────────
+# ─── Slack (optional — enables Slack notifications and approval buttons) ──────
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_NOTIFY_CHANNEL=C0123456789
 
@@ -160,33 +157,18 @@ RINGBA_ACCOUNT_ID=
 # Ad account IDs are configured per-agent in instance.md (not here).
 META_ACCESS_TOKEN=
 
-# ─── Mission Control Dashboard ────────────────────────────────────────────────
-# Run the dashboard: cd dashboard && pnpm dev  (port 3000)
-# Copy the API_KEY from dashboard/.env here
-MISSION_CONTROL_URL=http://localhost:3000
-MISSION_CONTROL_API_KEY=change-me
-
-# Shared secret for MC webhook HMAC verification — set the same value in both
-# ElevarusOS (.env) and in the webhook registered in MC.
-MC_WEBHOOK_SECRET=change-me-to-a-random-string
-
-# Public URL ElevarusOS is reachable at — MC posts approval webhooks here.
-# Leave blank for local dev (approvals won't auto-unblock workflows).
-# Docker: http://host.docker.internal:3001
-# Production: https://your-domain.com
-ELEVARUS_PUBLIC_URL=
-
 # ─── Orchestrator (optional overrides) ───────────────────────────────────────
-POLL_INTERVAL_MS=60000
 MAX_STAGE_RETRIES=2
 LOG_LEVEL=info
 JOB_STORE=file
 JOB_STORE_PATH=./data/jobs
 
-# ─── API server (optional) ────────────────────────────────────────────────────
+# ─── API server ───────────────────────────────────────────────────────────────
 API_PORT=3001
 # Leave blank for no auth; set to require x-api-key header on /api/* routes
 API_SECRET=
+# Comma-separated list of origins allowed for CORS (dashboard origin by default)
+CORS_ORIGINS=http://localhost:3000
 
 # ─── Supabase (optional — enables persistent job storage) ────────────────────
 # Create a project at https://supabase.com, then:

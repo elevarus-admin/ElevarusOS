@@ -45,6 +45,28 @@ export interface InstanceMeta {
   campaignIds?: string[];
 }
 
+/**
+ * ClickUp integration config — opt-in per instance. When present and
+ * `syncEnabled` is true, the `clickup-sync` workflow stage posts a completion
+ * comment + status update on the originating ClickUp task at end-of-job.
+ * No-op when the job has no `metadata.clickupTaskId`.
+ */
+export interface InstanceClickUp {
+  /** ClickUp list ID this instance owns. Used by inbound webhook agent resolution (Phase 4). */
+  listId:      string;
+  /** ClickUp space containing the list. */
+  spaceId:     string;
+  /** Master switch — when false the clickup-sync stage no-ops cleanly. */
+  syncEnabled: boolean;
+  /** Map of ElevarusOS job state → ClickUp status string for THIS list. Status strings are case-sensitive. */
+  statusMap: {
+    queued?:    string;
+    running:    string;
+    completed:  string;
+    failed:     string;
+  };
+}
+
 /** Ringba integration config — used by ppc-campaign-report workflow instances. */
 export interface InstanceRingba {
   /** Ringba campaign name to pull metrics for. */
@@ -97,6 +119,8 @@ export interface InstanceConfig {
   ringba?: InstanceRingba;
   /** Meta Ads integration config (reporting workflow instances) */
   meta?: InstanceMeta;
+  /** ClickUp integration config (any instance opting into clickup-sync) */
+  clickup?: InstanceClickUp;
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -124,6 +148,7 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
   const schedule = (data.schedule as any) ?? {};
   const ringba   = (data.ringba   as any) ?? null;
   const meta     = (data.meta     as any) ?? null;
+  const clickup  = (data.clickup  as any) ?? null;
 
   return {
     id: String(data.id ?? instanceId),
@@ -160,6 +185,19 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
           campaignIds: Array.isArray(meta.campaignIds)
             ? meta.campaignIds.map(String).filter(Boolean)
             : undefined,
+        }
+      : undefined,
+    clickup: clickup?.listId
+      ? {
+          listId:      String(clickup.listId),
+          spaceId:     String(clickup.spaceId ?? ""),
+          syncEnabled: Boolean(clickup.syncEnabled ?? false),
+          statusMap: {
+            queued:    clickup.statusMap?.queued    ? String(clickup.statusMap.queued)    : undefined,
+            running:   String(clickup.statusMap?.running   ?? "in progress"),
+            completed: String(clickup.statusMap?.completed ?? "completed"),
+            failed:    String(clickup.statusMap?.failed    ?? "needs input"),
+          },
         }
       : undefined,
   };

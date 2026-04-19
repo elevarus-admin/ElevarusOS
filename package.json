@@ -13,13 +13,15 @@
     "setup:dashboard": "cd dashboard && pnpm install --frozen-lockfile 2>/dev/null || npm install --legacy-peer-deps",
     "dashboard:dev": "cd dashboard && pnpm dev",
     "dashboard:build": "cd dashboard && pnpm build",
-    "start:all": "concurrently --kill-others-on-fail --names \"ElevarusOS,Dashboard,Ngrok\" --prefix-colors \"cyan,magenta,yellow\" \"npm run dev:watch\" \"npm run dashboard:dev\" \"npm run tunnel\"",
+    "start:all": "concurrently --kill-others-on-fail --names \"ElevarusOS,Dashboard\" --prefix-colors \"cyan,magenta\" \"npm run dev:watch\" \"npm run dashboard:dev\"",
+    "start:full": "concurrently --kill-others-on-fail --names \"ElevarusOS,Dashboard,Ngrok\" --prefix-colors \"cyan,magenta,yellow\" \"npm run dev:watch\" \"npm run dashboard:dev\" \"npm run tunnel\"",
     "tunnel": "ngrok http 3001 --log=stdout --log-format=logfmt",
     "once": "ts-node src/index.ts --once",
     "once:blog": "ts-node src/index.ts --once --bot elevarus-blog",
     "once:report": "ts-node src/index.ts --once --bot u65-reporting",
     "backfill:lp":     "ts-node scripts/backfill-leadsprosper.ts",
-    "backfill:ringba": "ts-node scripts/backfill-ringba.ts"
+    "backfill:ringba": "ts-node scripts/backfill-ringba.ts",
+    "sync:clickup-catalog": "ts-node scripts/sync-clickup-catalog.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

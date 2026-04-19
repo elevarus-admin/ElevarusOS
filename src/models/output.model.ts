@@ -51,6 +51,9 @@ export interface ApprovalNotifyOutput {
   slackMessageTs?: string;
   emailMessageId?: string;
   notifiedAt: string;
+  /** Set once the approver acts (true = approved, false = rejected/timed-out) */
+  approved?: boolean;
+  decidedAt?: string;
 }
 
 export interface PublishPlaceholderOutput {

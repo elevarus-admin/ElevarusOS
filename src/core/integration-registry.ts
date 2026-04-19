@@ -75,11 +75,13 @@ export interface IntegrationManifest {
 import { manifest as ringbaManifest }        from "../integrations/ringba/manifest";
 import { manifest as leadsprosperManifest }  from "../integrations/leadsprosper/manifest";
 import { manifest as metaManifest }          from "../integrations/meta/manifest";
+import { manifest as clickupManifest }       from "../integrations/clickup/manifest";
 
 export const INTEGRATION_MANIFESTS: IntegrationManifest[] = [
   ringbaManifest,
   leadsprosperManifest,
   metaManifest,
+  clickupManifest,
 ];
 
 // ─── Aggregations ─────────────────────────────────────────────────────────────

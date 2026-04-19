@@ -5,45 +5,43 @@
  * ARCHITECTURE
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Mission Control (MC) is the source of truth for all tasks and agent state.
- * ElevarusOS is the workflow execution runtime.
+ * ElevarusOS is the workflow execution runtime. Jobs are submitted directly
+ * via the Scheduler (cron), the REST API, or Slack intake adapters — no
+ * external task board required.
  *
- *   MC Task Board  ←──────────────────────────────────────┐
- *         │                                               │
- *         ▼  (MCWorker polls queue)                       │ status updates
- *   MCWorker claims task                                  │
- *         │                                               │
- *         ▼                                               │
- *   Workflow stages run (Claude API, research, drafting)  │
- *         │                                               │
- *         ▼  (approval_notify stage)                      │
- *   MC task → "review"  ──── Human approves in MC UI ─────┘
- *         │  (webhook fires → notifyApproval)
- *         ▼
+ *   Scheduler / API / Slack
+ *         │
+ *         ▼  orchestrator.submitJob()
+ *   Orchestrator creates job + runs stages
+ *         │
+ *         ▼  (approval_notify stage)
+ *   ApprovalStore.waitForApproval(jobId)  ← blocks until action received
+ *         │  POST /api/jobs/:jobId/approve  or  Slack interactive button
+ *         ▼  approvalStore.notifyApproval(jobId, true)
  *   Remaining stages (publish, completion)
  *         │
  *         ▼
- *   MC task → "done"
+ *   Job → "completed"
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ADDING A NEW BOT INSTANCE
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * 1. Create src/instances/<id>/instance.md  (copy from src/instances/_template/)
- *    — OR — POST /api/instances  (creates the file + registers in MC)
+ *    — OR — POST /api/instances  (creates the file)
  *
  * 2. Register it below — one line:
  *    registry.register(buildBlogWorkflowDefinition(notifiers, "<id>"));
  *
- * 3. Restart ElevarusOS — the bot appears in MC automatically.
- *    Assign tasks to it in the MC Task Board; MCWorker picks them up.
+ * 3. Restart ElevarusOS — the bot is live immediately.
+ *    Submit jobs via POST /api/jobs or the Scheduler cron.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * RUN MODES
  * ─────────────────────────────────────────────────────────────────────────────
  *
- *   npm run dev                   — daemon: MCWorker polls MC; scheduler fires tasks
- *   npm run dev -- --once         — run one sample job directly (no MC required)
+ *   npm run dev                   — daemon: Scheduler fires jobs; API server live
+ *   npm run dev -- --once         — run one sample job directly
  *   npm run dev -- --once --bot   — specify which instance to test
  *       e.g. npm run dev -- --once --bot u65-reporting
  */
@@ -54,8 +52,6 @@ import { createJobStore }  from "./core/job-store";
 import { Orchestrator }    from "./core/orchestrator";
 import { WorkflowRegistry } from "./core/workflow-registry";
 import { Scheduler }       from "./core/scheduler";
-import { MCWorker }        from "./core/mc-worker";
-import { MCClient }        from "./core/mc-client";
 import { ApiServer }       from "./api/server";
 import { LeadsProsperSyncWorker } from "./integrations/leadsprosper";
 import { RingbaSyncWorker }       from "./integrations/ringba";
@@ -90,9 +86,9 @@ async function main(): Promise<void> {
     new EmailNotifyAdapter(),
   ];
 
+  const intakeAdapters = [new ClickUpIntakeAdapter(), new EmailIntakeAdapter()];
+
   // ─── Workflow registry ─────────────────────────────────────────────────────
-  // Each entry is a named bot instance. workflowType on the task must match
-  // the instanceId exactly so MCWorker routes the right workflow.
 
   const registry = new WorkflowRegistry();
 
@@ -101,24 +97,23 @@ async function main(): Promise<void> {
   registry.register(buildBlogWorkflowDefinition(notifiers, "elevarus-blog"));
   registry.register(buildBlogWorkflowDefinition(notifiers, "nes-blog"));
 
-  // Reporting bots — one workflow per MC agent
+  // Reporting bots
   registry.register(buildFinalExpenseReportingWorkflow(notifiers));
   registry.register(buildU65ReportingWorkflow(notifiers));
   registry.register(buildHvacReportingWorkflow(notifiers));
 
   // ─── Single-run test mode (--once) ────────────────────────────────────────
-  // Runs a workflow directly via Orchestrator — no MC required.
+  // Runs a workflow directly via Orchestrator — no daemon required.
   // Useful for local testing and CI smoke tests.
 
   if (process.argv.includes("--once")) {
     const botArg     = process.argv.indexOf("--bot");
     const instanceId = botArg !== -1 ? process.argv[botArg + 1] : "elevarus-blog";
 
-    logger.info("Running in --once mode (direct execution, no MC)", { instanceId });
+    logger.info("Running in --once mode (direct execution)", { instanceId });
 
-    const intakeAdapters = [new ClickUpIntakeAdapter(), new EmailIntakeAdapter()];
-    const orchestrator   = new Orchestrator(jobStore, intakeAdapters, notifiers, registry);
-    const sampleRequest  = buildSampleRequest(instanceId);
+    const orchestrator  = new Orchestrator(jobStore, intakeAdapters, notifiers, registry);
+    const sampleRequest = buildSampleRequest(instanceId);
 
     try {
       const job = await orchestrator.submitJob(sampleRequest, instanceId);
@@ -134,97 +129,47 @@ async function main(): Promise<void> {
 
   // ─── Daemon mode ──────────────────────────────────────────────────────────
 
-  // ── MCWorker (daemon workhorse) ────────────────────────────────────────────
-  // Registers agents in MC, polls the task queue, executes workflows, and
-  // routes approval webhook events back to the right workflow.
-  //
-  // Requires: MISSION_CONTROL_URL + MISSION_CONTROL_API_KEY in .env
-  // If not set, daemon runs without MC (intake adapters drive jobs directly).
+  // ── Single shared Orchestrator ────────────────────────────────────────────
+  // All job submissions (Scheduler, API, Slack) share one Orchestrator so the
+  // job store stays consistent and the ApprovalStore singleton is reachable
+  // from both the running stages and the API webhook handlers.
 
-  const mcWorker = new MCWorker(registry, notifiers, jobStore);
-  await mcWorker.start();
-
-  // ── Webhook registration ───────────────────────────────────────────────────
-  // Register ElevarusOS as a webhook receiver in MC so approvals flow back
-  // automatically instead of being polled.
-  //
-  // MC will POST to: ELEVARUS_PUBLIC_URL/api/webhooks/mc
-  // Set ELEVARUS_PUBLIC_URL in .env (e.g. https://elevarus.ngrok.io or
-  // http://host.docker.internal:3001 for Docker, or leave blank for localhost).
-
-  if (mcWorker.enabled) {
-    const publicUrl  = (process.env.ELEVARUS_PUBLIC_URL ?? "").replace(/\/$/, "");
-    const webhookUrl = publicUrl
-      ? `${publicUrl}/api/webhooks/mc`
-      : null;
-
-    if (webhookUrl) {
-      const mcClient = new MCClient();
-      await mcClient.registerWebhook(webhookUrl, ["task.updated", "task.created"]);
-    } else {
-      logger.info(
-        "MCWorker: ELEVARUS_PUBLIC_URL not set — MC webhook not registered. " +
-        "Set it to enable push-based approvals (e.g. ELEVARUS_PUBLIC_URL=http://host.docker.internal:3001). " +
-        "Without it, approvals require a manual call to POST /api/webhooks/mc."
-      );
-    }
-  }
+  const orchestrator = new Orchestrator(jobStore, intakeAdapters, notifiers, registry);
 
   // ── API server ─────────────────────────────────────────────────────────────
   // GET  /api/health | /api/bots | /api/jobs | /api/schedule | /api/instances
-  // POST /api/jobs      — creates MC task (daemon) or runs directly (--once)
-  // POST /api/instances — scaffold + register new bot
-  // POST /api/webhooks/mc — MC webhook receiver (approval events)
+  // POST /api/jobs                    — submit a job immediately
+  // POST /api/instances               — scaffold a new bot
+  // POST /api/jobs/:jobId/approve     — approve a pending job
+  // POST /api/jobs/:jobId/reject      — reject a pending job
+  // POST /api/webhooks/slack          — Slack Events API receiver
+  // POST /api/webhooks/slack/interactions — Slack interactive button handler
 
   const apiServer = new ApiServer({
-    port:      parseInt(process.env.API_PORT ?? "3001", 10),
+    port:        parseInt(process.env.API_PORT ?? "3001", 10),
     jobStore,
     registry,
-    mcWorker,
-    // Orchestrator not needed in daemon mode — MCWorker handles execution
+    orchestrator,
   });
   apiServer.start();
 
   // ── Scheduler ─────────────────────────────────────────────────────────────
-  // Fires jobs for instances with schedule.enabled: true.
-  // In daemon mode, creates MC tasks (picked up by MCWorker).
-  // Falls back to direct job submission if MC is not configured.
+  // Fires jobs for instances with schedule.enabled: true in instance.md.
+  // Each scheduled run submits directly to the shared Orchestrator.
 
   const scheduler = new Scheduler(async (instanceId) => {
-    if (mcWorker.enabled) {
-      const req = buildSampleRequest(instanceId);
-      await mcWorker.createTask({
-        instanceId,
-        title:       req.title,
-        description: req.brief,
-        tags:        [instanceId, instanceId.includes("reporting") ? "reporting" : "blog"],
-        metadata: {
-          request: {
-            title:    req.title,
-            brief:    req.brief,
-            audience: req.audience,
-            keyword:  req.targetKeyword,
-            cta:      req.cta,
-            approver: req.approver,
-          },
-        },
-      });
-      logger.info("Scheduler: MC task created", { instanceId, title: req.title });
-    } else {
-      // MC not configured — run directly (legacy path)
-      const intakeAdapters = [new ClickUpIntakeAdapter(), new EmailIntakeAdapter()];
-      const orchestrator   = new Orchestrator(jobStore, intakeAdapters, notifiers, registry);
-      const req            = buildSampleRequest(instanceId);
-      await orchestrator.submitJob(req, instanceId);
-    }
+    const req = buildSampleRequest(instanceId);
+    logger.info("Scheduler: submitting job", { instanceId, title: req.title });
+    // Fire-and-forget — orchestrator handles the job lifecycle asynchronously
+    orchestrator.submitJob(req, instanceId).catch((err) => {
+      logger.error("Scheduler: job failed", { instanceId, error: String(err) });
+    });
   });
   scheduler.start();
 
   // ── Data sync workers ─────────────────────────────────────────────────────
   // Keep Supabase in sync with external platforms. Each worker runs on its own
-  // cron, no-ops if its API key / Supabase is missing. Workflows read the
-  // resulting Supabase rows via integration repositories — never the API
-  // directly.
+  // cron, no-ops if its API key / Supabase credentials are missing.
 
   const lpSync     = new LeadsProsperSyncWorker();
   const ringbaSync = new RingbaSyncWorker();
@@ -235,7 +180,6 @@ async function main(): Promise<void> {
 
   const shutdown = (): void => {
     logger.info("Shutting down...");
-    mcWorker.stop();
     scheduler.stop();
     lpSync.stop();
     ringbaSync.stop();
@@ -257,13 +201,13 @@ function buildSampleRequest(instanceId: string) {
         month: "short", day: "numeric", year: "numeric",
       })}`,
       brief: JSON.stringify({
-        leads:          47,
-        cpl:            38.50,
-        spend:          1809.50,
-        budget:         2000,
+        leads:           47,
+        cpl:             38.50,
+        spend:           1809.50,
+        budget:          2000,
         conversion_rate: "4.2%",
-        top_ad_set:     "Awareness — 45-64 Homeowners",
-        vs_last_week:   { leads: "+8%", cpl: "-5%", spend: "+2%" },
+        top_ad_set:      "Awareness — 45-64 Homeowners",
+        vs_last_week:    { leads: "+8%", cpl: "-5%", spend: "+2%" },
       }),
       audience:      "Elevarus account managers",
       targetKeyword: instanceId.replace("-reporting", "").toUpperCase(),

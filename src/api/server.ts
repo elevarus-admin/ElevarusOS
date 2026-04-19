@@ -2,7 +2,7 @@
  * ElevarusOS API Server
  *
  * Lightweight REST API exposing bot status, job history, instance configs,
- * and an inbound webhook receiver for Mission Control events.
+ * approval actions, and inbound Slack webhook receivers.
  *
  * ─── Endpoints ───────────────────────────────────────────────────────────────
  *
@@ -13,23 +13,25 @@
  *
  *   GET  /api/jobs                  — list jobs (query: ?status=&instanceId=&limit=)
  *   GET  /api/jobs/:jobId           — full job detail (all stages + outputs)
- *   POST /api/jobs                  — submit a new job (creates MC task in daemon mode)
+ *   GET  /api/jobs/:jobId/output    — stage outputs for a completed job
+ *   POST /api/jobs                  — submit a new job (runs via Orchestrator)
  *                                     body: { workflowType, title, brief, audience,
  *                                             targetKeyword, cta, approver? }
+ *   POST /api/jobs/:jobId/approve   — approve a pending approval gate
+ *   POST /api/jobs/:jobId/reject    — reject a pending approval gate
  *
  *   GET  /api/schedule              — upcoming scheduled runs per instance
  *
  *   GET  /api/instances             — list all instance configs
  *   POST /api/instances             — create a new bot instance
  *
- *   POST /api/webhooks/mc           — Mission Control webhook receiver
- *                                     Receives signed task.updated events and
- *                                     routes approvals to MCWorker.
+ *   POST /api/webhooks/slack              — Slack Events API receiver (Q&A bot)
+ *   POST /api/webhooks/slack/interactions — Slack interactive components (Approve/Reject buttons)
  *
  * ─── Auth ────────────────────────────────────────────────────────────────────
  *
  * Optional: set API_SECRET in .env to require x-api-key header on all routes
- * (except /api/webhooks/mc which uses HMAC signature verification instead).
+ * (except webhook endpoints which use Slack HMAC signature verification).
  */
 
 import * as fs from "fs";
@@ -39,7 +41,7 @@ import express, { Request, Response, NextFunction } from "express";
 import { IJobStore } from "../core/job-store";
 import { WorkflowRegistry } from "../core/workflow-registry";
 import { Orchestrator } from "../core/orchestrator";
-import { MCWorker } from "../core/mc-worker";
+import { approvalStore } from "../core/approval-store";
 import { scaffoldInstanceWorkspace } from "../core/workspace-scaffold";
 import { listInstanceIds, loadInstanceConfig } from "../core/instance-config";
 import { logger } from "../core/logger";
@@ -55,22 +57,42 @@ import { config } from "../config";
 const INSTANCES_DIR = path.resolve(__dirname, "../instances");
 
 export interface ApiServerOptions {
-  port:         number;
-  jobStore:     IJobStore;
-  registry:     WorkflowRegistry;
-  /** Optional — required for POST /api/jobs in direct/--once mode */
+  port:          number;
+  jobStore:      IJobStore;
+  registry:      WorkflowRegistry;
+  /** Required for POST /api/jobs — runs workflows directly */
   orchestrator?: Orchestrator;
-  /** Optional — when present, POST /api/jobs creates an MC task instead */
-  mcWorker?:    MCWorker;
 }
 
 export class ApiServer {
   private readonly app = express();
 
   constructor(private readonly options: ApiServerOptions) {
-    // Raw body needed for webhook HMAC verification — must come before json()
-    this.app.use("/api/webhooks/mc",    express.raw({ type: "application/json" }));
-    this.app.use("/api/webhooks/slack", express.raw({ type: "application/json" }));
+    // CORS — allow the dashboard (and any configured origin) to call the API
+    // from the browser. The dashboard runs on port 3000; the API on 3001.
+    const allowedOrigins = (process.env.CORS_ORIGINS ?? "http://localhost:3000")
+      .split(",")
+      .map((o) => o.trim());
+
+    this.app.use((req: Request, res: Response, next: NextFunction) => {
+      const origin = req.headers.origin ?? "";
+      if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
+        res.setHeader("Access-Control-Allow-Origin",  origin);
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key, Authorization");
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+      }
+      if (req.method === "OPTIONS") {
+        res.sendStatus(204);
+        return;
+      }
+      next();
+    });
+
+    // Raw body needed for Slack HMAC signature verification — must come before json()
+    // /api/webhooks/slack/interactions uses urlencoded (Slack sends payload= field)
+    this.app.use("/api/webhooks/slack/interactions", express.raw({ type: "application/x-www-form-urlencoded" }));
+    this.app.use("/api/webhooks/slack",              express.raw({ type: "application/json" }));
     this.app.use(express.json());
     this.app.use(this.authMiddleware.bind(this));
     this.registerRoutes();
@@ -85,8 +107,7 @@ export class ApiServer {
   // ─── Auth middleware ────────────────────────────────────────────────────────
 
   private authMiddleware(req: Request, res: Response, next: NextFunction): void {
-    // Webhook endpoints authenticate via HMAC — skip API key check
-    if (req.path.startsWith("/api/webhooks/mc"))    { next(); return; }
+    // Webhook endpoints authenticate via Slack HMAC — skip API key check
     if (req.path.startsWith("/api/webhooks/slack")) { next(); return; }
 
     const secret = process.env.API_SECRET;
@@ -119,6 +140,8 @@ export class ApiServer {
     r.get("/api/jobs/:jobId",             this.handleAsync(this.getJob.bind(this)));
     r.get("/api/jobs/:jobId/output",      this.handleAsync(this.getJobOutput.bind(this)));
     r.post("/api/jobs",                   this.handleAsync(this.submitJob.bind(this)));
+    r.post("/api/jobs/:jobId/approve",    this.handleAsync(this.approveJob.bind(this)));
+    r.post("/api/jobs/:jobId/reject",     this.handleAsync(this.rejectJob.bind(this)));
 
     // ── Schedule ─────────────────────────────────────────────────────────────
     r.get("/api/schedule",     this.handleAsync(this.getSchedule.bind(this)));
@@ -136,11 +159,11 @@ export class ApiServer {
     // ── Action APIs — MC agents call these to trigger deliveries ─────────────
     r.post("/api/actions/slack",        this.handleAsync(this.postSlackMessage.bind(this)));
 
-    // ── Mission Control webhook receiver ──────────────────────────────────────
-    r.post("/api/webhooks/mc", this.handleAsync(this.receiveMCWebhook.bind(this)));
-
-    // ── Slack Events API receiver (Q&A bot) ───────────────────────────────────
-    r.post("/api/webhooks/slack", this.handleAsync(this.receiveSlackWebhook.bind(this)));
+    // ── Slack webhook receivers ───────────────────────────────────────────────
+    // Order matters: the more-specific /interactions route must be registered
+    // before the generic /api/webhooks/slack route (Express prefix matching)
+    r.post("/api/webhooks/slack/interactions", this.handleAsync(this.receiveSlackInteraction.bind(this)));
+    r.post("/api/webhooks/slack",              this.handleAsync(this.receiveSlackWebhook.bind(this)));
 
     // ── 404 catch-all ────────────────────────────────────────────────────────
     r.use((_req, res) => {
@@ -227,21 +250,35 @@ export class ApiServer {
     });
   }
 
+  /**
+   * GET /api/jobs
+   *
+   * Query params:
+   *   status      — filter by job status
+   *   instanceId  — filter by workflowType
+   *   limit       — max results (default 50, cap 200)
+   *   offset      — records to skip for pagination (default 0)
+   *
+   * Response includes `total` (count before pagination), `limit`, and `offset`
+   * so the dashboard can compute total pages.
+   */
   private async listJobs(req: Request, res: Response): Promise<void> {
     const status     = typeof req.query.status     === "string" ? req.query.status     : undefined;
     const instanceId = typeof req.query.instanceId === "string" ? req.query.instanceId : undefined;
     const limitRaw   = typeof req.query.limit      === "string" ? req.query.limit      : "50";
-    const maxResults = Math.min(parseInt(limitRaw, 10), 200);
+    const offsetRaw  = typeof req.query.offset     === "string" ? req.query.offset     : "0";
+    const maxResults = Math.min(parseInt(limitRaw,  10) || 50,  200);
+    const skipCount  = Math.max(parseInt(offsetRaw, 10) || 0,   0);
 
     let jobs = await this.options.jobStore.list();
     if (status)     jobs = jobs.filter((j) => j.status === status);
     if (instanceId) jobs = jobs.filter((j) => j.workflowType === instanceId);
 
-    jobs = jobs
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, maxResults);
+    jobs = jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const total   = jobs.length;
+    const paged   = jobs.slice(skipCount, skipCount + maxResults);
 
-    const rows = jobs.map((j) => ({
+    const rows = paged.map((j) => ({
       jobId:           j.id,
       workflowType:    j.workflowType,
       status:          j.status,
@@ -256,7 +293,7 @@ export class ApiServer {
       error:           j.error ?? null,
     }));
 
-    res.json({ jobs: rows, total: rows.length });
+    res.json({ jobs: rows, total, limit: maxResults, offset: skipCount });
   }
 
   private async getJob(req: Request, res: Response): Promise<void> {
@@ -290,15 +327,6 @@ export class ApiServer {
     });
   }
 
-  /**
-   * POST /api/jobs
-   *
-   * In daemon mode (MCWorker configured): creates a task in MC and returns
-   * immediately. MCWorker picks it up via queue polling.
-   *
-   * In --once/direct mode (orchestrator only): runs the workflow synchronously
-   * and returns the job ID.
-   */
   /**
    * GET /api/jobs/:jobId/output
    *
@@ -369,29 +397,8 @@ export class ApiServer {
       return;
     }
 
-    // ── Daemon mode: create MC task ──────────────────────────────────────────
-    if (this.options.mcWorker?.enabled) {
-      const mcTaskId = await this.options.mcWorker.createTask({
-        instanceId:  workflowType,
-        title,
-        description: brief,
-        metadata: {
-          request: { title, brief, audience, keyword: targetKeyword, cta, approver },
-        },
-      });
-
-      res.status(202).json({
-        message:   "Task created in Mission Control",
-        mcTaskId,
-        workflowType,
-        mcUrl:     `${process.env.MISSION_CONTROL_URL ?? "http://localhost:3000"}/tasks`,
-      });
-      return;
-    }
-
-    // ── Direct mode: run via orchestrator ────────────────────────────────────
     if (!this.options.orchestrator) {
-      res.status(503).json({ error: "No orchestrator or MCWorker available" });
+      res.status(503).json({ error: "Orchestrator not available" });
       return;
     }
 
@@ -411,12 +418,13 @@ export class ApiServer {
       missingFields: [],
     };
 
+    // Fire-and-forget — the workflow runs asynchronously; clients poll /api/jobs/:jobId
     const jobPromise = this.options.orchestrator.submitJob(request, workflowType);
     jobPromise.catch((err) => {
       logger.error("API-submitted job failed", { error: String(err) });
     });
 
-    // Give orchestrator a tick to create and save the job
+    // Give orchestrator a tick to create and persist the job record
     await new Promise((r) => setTimeout(r, 50));
 
     const allJobs = await this.options.jobStore.list();
@@ -429,6 +437,95 @@ export class ApiServer {
       jobId:       newest?.id ?? "unknown",
       workflowType,
       pollUrl:     `/api/jobs/${newest?.id ?? "unknown"}`,
+    });
+  }
+
+  /**
+   * POST /api/jobs/:jobId/approve
+   *
+   * Approves a job that is currently awaiting_approval.
+   * Resolves the in-process ApprovalStore gate, allowing the workflow to continue.
+   *
+   * Body (optional):
+   *   approvedBy  string  — identifier of who approved (email, user ID, etc.)
+   *   notes       string  — optional approval notes
+   */
+  private async approveJob(req: Request, res: Response): Promise<void> {
+    const jobId = String(req.params.jobId);
+    const { approvedBy, notes } = req.body ?? {};
+
+    const job = await this.options.jobStore.get(jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    if (job.status !== "awaiting_approval") {
+      res.status(409).json({
+        error:      `Job is not awaiting approval (current status: ${job.status})`,
+        jobId,
+        status:     job.status,
+      });
+      return;
+    }
+
+    // Update the job approval state so it's persisted even if the daemon restarts
+    job.approval.approved  = true;
+    job.approval.approvedBy = approvedBy ?? "api";
+    job.approval.approvedAt = new Date().toISOString();
+    if (notes) job.approval.notes = notes;
+    await this.options.jobStore.save(job);
+
+    const resolved = approvalStore.notifyApproval(jobId, true);
+    logger.info("Job approved via API", { jobId, approvedBy: approvedBy ?? "api", resolved });
+
+    res.json({
+      message:   "Job approved",
+      jobId,
+      resolved,
+      hint:      resolved ? undefined : "Daemon may have restarted — approval state persisted but workflow callback was lost",
+    });
+  }
+
+  /**
+   * POST /api/jobs/:jobId/reject
+   *
+   * Rejects a job that is currently awaiting_approval.
+   * The workflow will stop and the job will be marked "rejected".
+   *
+   * Body (optional):
+   *   rejectedBy  string  — identifier of who rejected
+   *   reason      string  — rejection reason / feedback
+   */
+  private async rejectJob(req: Request, res: Response): Promise<void> {
+    const jobId = String(req.params.jobId);
+    const { rejectedBy, reason } = req.body ?? {};
+
+    const job = await this.options.jobStore.get(jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    if (job.status !== "awaiting_approval") {
+      res.status(409).json({
+        error:  `Job is not awaiting approval (current status: ${job.status})`,
+        jobId,
+        status: job.status,
+      });
+      return;
+    }
+
+    if (reason) job.approval.notes = reason;
+    await this.options.jobStore.save(job);
+
+    const resolved = approvalStore.notifyApproval(jobId, false);
+    logger.info("Job rejected via API", { jobId, rejectedBy: rejectedBy ?? "api", resolved });
+
+    res.json({
+      message:  "Job rejected",
+      jobId,
+      resolved,
     });
   }
 
@@ -568,8 +665,6 @@ export class ApiServer {
       // Non-fatal
     }
 
-    const mcRegistered = false; // MCWorker picks up new agents on next restart
-
     logger.info("API: instance created", { id, name, baseWorkflow });
 
     res.status(201).json({
@@ -578,78 +673,121 @@ export class ApiServer {
       name,
       baseWorkflow,
       instanceDir,
-      mcRegistered,
       nextStep: `Add registry.register(build${baseWorkflow === "blog" ? "Blog" : "PPCCampaignReport"}WorkflowDefinition(notifiers, "${id}")); to src/index.ts and restart.`,
     });
   }
 
-  // ─── Mission Control webhook receiver ────────────────────────────────────────
+  // ─── Slack Interactive Components receiver ───────────────────────────────────
 
   /**
-   * POST /api/webhooks/mc
+   * POST /api/webhooks/slack/interactions
    *
-   * Receives signed webhook events from Mission Control.
-   * MC sends this when tasks are updated — we watch for approval events
-   * (task moved to "done" or "quality_review" while status was "review").
+   * Receives interactive component payloads from Slack (button clicks on the
+   * approval notification message). Slack sends application/x-www-form-urlencoded
+   * with a single `payload` field containing JSON.
    *
-   * Security: HMAC-SHA256 signature verified via X-MC-Signature header.
-   * Configure MC_WEBHOOK_SECRET to match the secret used when registering.
+   * Security: v0 HMAC-SHA256 via x-slack-signature + x-slack-request-timestamp.
+   * Configure SLACK_SIGNING_SECRET in .env.
    *
-   * Events handled:
-   *   task.updated  — routes approval to MCWorker.notifyApproval()
-   *   agent.*       — logged for observability
+   * Actions handled:
+   *   approve_job  — calls approvalStore.notifyApproval(jobId, true)
+   *   reject_job   — calls approvalStore.notifyApproval(jobId, false)
+   *
+   * Slack expects a 2xx within 3s. We verify + ack immediately, then dispatch.
+   * We also update the original message to show the decision (no more buttons).
    */
-  private async receiveMCWebhook(req: Request, res: Response): Promise<void> {
-    // Verify HMAC signature (if secret is configured)
-    const secret = process.env.MC_WEBHOOK_SECRET;
-    if (secret) {
-      const signature = req.headers["x-mc-signature"] as string | undefined;
-      if (!signature) {
-        res.status(401).json({ error: "Missing X-MC-Signature" });
-        return;
-      }
-      const rawBody = req.body as Buffer;
-      const expected = "sha256=" + crypto
-        .createHmac("sha256", secret)
-        .update(rawBody)
-        .digest("hex");
-
-      if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
-        res.status(401).json({ error: "Invalid signature" });
-        return;
-      }
-    }
-
-    // Parse payload
-    let payload: {
-      event:   string;
-      task?:   { id: number; status: string; assigned_to?: string };
-      agent?:  { id: number; name: string; status: string };
-    };
-
-    try {
-      const raw = req.body instanceof Buffer ? req.body.toString("utf8") : JSON.stringify(req.body);
-      payload   = JSON.parse(raw);
-    } catch {
-      res.status(400).json({ error: "Invalid JSON payload" });
+  private async receiveSlackInteraction(req: Request, res: Response): Promise<void> {
+    const signingSecret = config.slack.signingSecret;
+    if (!signingSecret) {
+      res.status(503).json({ error: "SLACK_SIGNING_SECRET not configured" });
       return;
     }
 
-    const { event, task } = payload;
+    const rawBody   = req.body instanceof Buffer ? req.body : Buffer.from("");
+    const timestamp = req.headers["x-slack-request-timestamp"] as string | undefined;
+    const signature = req.headers["x-slack-signature"]         as string | undefined;
 
-    logger.debug("MCWorker: webhook received", { event, taskId: task?.id, status: task?.status });
-
-    // ── Approval events ──────────────────────────────────────────────────────
-    // MC fires task.updated when a human moves a task to "done" or "quality_review"
-    if (event === "task.updated" && task) {
-      const approved = task.status === "done" || task.status === "quality_review";
-      if (approved && this.options.mcWorker) {
-        this.options.mcWorker.notifyApproval(task.id, true);
-      }
+    const verified = verifySlackSignature(rawBody, timestamp, signature, signingSecret);
+    if (!verified.ok) {
+      logger.warn("Slack interactions: signature verification failed", { error: verified.error });
+      res.status(401).json({ error: verified.error ?? "Invalid signature" });
+      return;
     }
 
-    // Acknowledge receipt immediately — MC expects a 2xx within 10s
-    res.status(200).json({ received: true, event });
+    // Parse application/x-www-form-urlencoded payload
+    let interactionPayload: {
+      type:         string;
+      actions?:     Array<{ action_id: string; value: string }>;
+      user?:        { id: string; name: string };
+      response_url?: string;
+      message?:     { ts: string; channel?: string };
+      channel?:     { id: string };
+    };
+
+    try {
+      const urlEncoded = rawBody.toString("utf8");
+      const params     = new URLSearchParams(urlEncoded);
+      const raw        = params.get("payload");
+      if (!raw) throw new Error("Missing payload field");
+      interactionPayload = JSON.parse(raw);
+    } catch (err) {
+      res.status(400).json({ error: "Invalid interaction payload" });
+      return;
+    }
+
+    // Ack immediately — Slack retries if no 2xx within 3s
+    res.status(200).send("");
+
+    // Process asynchronously
+    void this.handleSlackInteraction(interactionPayload);
+  }
+
+  private async handleSlackInteraction(payload: {
+    type:          string;
+    actions?:      Array<{ action_id: string; value: string }>;
+    user?:         { id: string; name: string };
+    response_url?: string;
+    message?:      { ts: string; channel?: string };
+    channel?:      { id: string };
+  }): Promise<void> {
+    if (payload.type !== "block_actions") return;
+
+    const action = payload.actions?.[0];
+    if (!action) return;
+
+    const jobId    = action.value;
+    const actionId = action.action_id;
+    const userName = payload.user?.name ?? "unknown";
+
+    logger.info("Slack interaction received", { actionId, jobId, userName });
+
+    if (actionId !== "approve_job" && actionId !== "reject_job") {
+      logger.warn("Slack interaction: unknown action_id", { actionId });
+      return;
+    }
+
+    const approved = actionId === "approve_job";
+
+    // Resolve the in-process approval gate
+    const resolved = approvalStore.notifyApproval(jobId, approved);
+    logger.info("Slack interaction processed", { jobId, approved, resolved, userName });
+
+    // Replace the original message to confirm the decision (removes buttons)
+    if (payload.response_url) {
+      const label = approved ? "✅ Approved" : "❌ Rejected";
+      try {
+        await fetch(payload.response_url, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            replace_original: true,
+            text:             `${label} by @${userName} — job \`${jobId}\``,
+          }),
+        });
+      } catch (err) {
+        logger.warn("Slack interaction: failed to update original message", { error: String(err) });
+      }
+    }
   }
 
   // ─── Slack Events API receiver ────────────────────────────────────────────────

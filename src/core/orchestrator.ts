@@ -194,6 +194,16 @@ export class Orchestrator {
         continue;
       }
 
+      // For the approval gate: set awaiting_approval BEFORE the stage runs
+      // (the stage will block until the approver acts, so the status must
+      // reflect "waiting" during that time, not "running")
+      if (stage.stageName === "approval_notify") {
+        job.status = "awaiting_approval";
+        job.updatedAt = new Date().toISOString();
+        await this.jobStore.save(job);
+        await this.bridge?.onJobUpdated(job);
+      }
+
       const succeeded = await this.runStageWithRetry(job, stage, stageRecord);
 
       if (!succeeded) {
@@ -201,12 +211,19 @@ export class Orchestrator {
         return;
       }
 
-      // After approval_notify, flip status so callers know we're waiting
+      // After approval_notify resolves, check the decision
       if (stage.stageName === "approval_notify") {
-        job.status = "awaiting_approval";
+        const out = stageRecord.output as { approved?: boolean } | undefined;
+        if (!out?.approved) {
+          await this.rejectJob(job, "Rejected by approver or approval timed out");
+          return;
+        }
+        // Approved — resume normal execution
+        job.status = "running";
         job.updatedAt = new Date().toISOString();
         await this.jobStore.save(job);
         await this.bridge?.onJobUpdated(job);
+        logger.info("Job approved — continuing workflow", { jobId: job.id });
       }
     }
 
@@ -287,6 +304,22 @@ export class Orchestrator {
 
     logger.error("Job failed", { jobId: job.id, reason });
 
+    await Promise.allSettled(
+      this.notifiers.map((n) => n.sendFailure(job, reason))
+    );
+  }
+
+  private async rejectJob(job: Job, reason: string): Promise<void> {
+    job.status = "rejected";
+    job.error = reason;
+    job.updatedAt = new Date().toISOString();
+    await this.jobStore.save(job);
+    await this.bridge?.onJobUpdated(job);
+
+    logger.info("Job rejected", { jobId: job.id, reason });
+
+    // Reuse sendFailure for the notification (adapters can check job.status to
+    // customise the message in future)
     await Promise.allSettled(
       this.notifiers.map((n) => n.sendFailure(job, reason))
     );

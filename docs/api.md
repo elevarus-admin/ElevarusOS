@@ -1,6 +1,6 @@
 # ElevarusOS REST API Reference
 
-The ElevarusOS API server runs on port `3001` by default (configurable via `API_PORT`). It exposes endpoints for managing bot instances, querying job state, submitting new workflow jobs, fetching integration data, and receiving Mission Control webhooks.
+The ElevarusOS API server runs on port `3001` by default (configurable via `API_PORT`). It exposes endpoints for managing bot instances, querying job state, submitting new workflow jobs, fetching integration data, and handling approval actions.
 
 ---
 
@@ -12,7 +12,7 @@ The ElevarusOS API server runs on port `3001` by default (configurable via `API_
 x-api-key: <your-API_SECRET-value>
 ```
 
-**Webhook HMAC (separate).** The `POST /api/webhooks/mc` endpoint uses HMAC-SHA256 signature verification instead of an API key. See the [webhook section](#post-apiwebhooksmc) for details.
+Webhook routes (`/api/webhooks/*`) are exempt from API key auth and use their own signature verification.
 
 ---
 
@@ -159,9 +159,10 @@ List jobs with optional filtering. Returns the most recent jobs first.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `status` | string | — | Filter by job status: `pending`, `running`, `awaiting_approval`, `completed`, `failed` |
+| `status` | string | — | Filter by job status: `queued`, `running`, `awaiting_approval`, `approved`, `rejected`, `completed`, `failed` |
 | `instanceId` | string | — | Filter by workflow type / instance ID |
-| `limit` | number | `50` | Max results returned. Capped at `200` |
+| `limit` | number | `50` | Max results per page. Capped at `200` |
+| `offset` | number | `0` | Number of records to skip (for pagination) |
 
 **Response**
 
@@ -183,7 +184,9 @@ List jobs with optional filtering. Returns the most recent jobs first.
       "error": null
     }
   ],
-  "total": 1
+  "total": 42,
+  "limit": 50,
+  "offset": 0
 }
 ```
 
@@ -233,7 +236,7 @@ Full job detail including all stage records.
   "approval": {
     "required": true,
     "approved": true,
-    "approvedBy": "mission-control",
+    "approvedBy": "dashboard",
     "approvedAt": "2026-04-15T09:06:00.000Z"
   },
   "publishRecord": null,
@@ -336,10 +339,7 @@ curl http://localhost:3001/api/jobs/<jobId>/output | jq '.finalDraft'
 
 Submit a new workflow job.
 
-**Behavior depends on run mode:**
-
-- **Daemon mode** (MCWorker configured): creates a task in Mission Control and returns `202` immediately. MCWorker picks it up on the next poll cycle (within 60 seconds by default).
-- **Direct mode** (no MCWorker, orchestrator only): runs the workflow synchronously in-process and returns `202` with a `jobId` to poll.
+Runs the workflow asynchronously in-process via the `Orchestrator`. Returns `202` immediately with a `jobId` to poll.
 
 **Request body**
 
@@ -365,18 +365,7 @@ Submit a new workflow job.
 | `cta` | No | Call-to-action text |
 | `approver` | No | Email address for approval notifications |
 
-**Response (daemon mode)**
-
-```json
-{
-  "message": "Task created in Mission Control",
-  "mcTaskId": 1042,
-  "workflowType": "elevarus-blog",
-  "mcUrl": "http://localhost:3000/tasks"
-}
-```
-
-**Response (direct mode)**
+**Response**
 
 ```json
 {
@@ -393,7 +382,7 @@ Submit a new workflow job.
 |--------|-----------|
 | 400 | Missing required fields (`workflowType`, `title`, or `brief`) |
 | 400 | `workflowType` not registered in the workflow registry |
-| 503 | Neither MCWorker nor orchestrator is available |
+| 503 | Orchestrator is not available |
 
 **Example**
 
@@ -488,7 +477,7 @@ curl http://localhost:3001/api/instances
 
 ### POST /api/instances
 
-Creates a new bot instance on disk and registers it with Mission Control on the next ElevarusOS restart.
+Creates a new bot instance on disk. Register the workflow in `src/index.ts` and restart ElevarusOS to activate it.
 
 **Request body**
 
@@ -532,7 +521,7 @@ Creates a new bot instance on disk and registers it with Mission Control on the 
 }
 ```
 
-`mcRegistered` is always `false` — MCWorker registers new agents automatically on next startup.
+`mcRegistered` is always `false`. Add the instance to `src/index.ts` and restart ElevarusOS — the agent appears in the Dashboard automatically.
 
 **Error responses**
 
@@ -719,55 +708,91 @@ curl -X POST http://localhost:3001/api/actions/slack \
 
 ---
 
-### POST /api/webhooks/mc
+### POST /api/jobs/:jobId/approve
 
-Receives signed webhook events from Mission Control. This endpoint is called by MC — you do not call it directly.
+Approves a job that is waiting at the `approval_notify` stage. Resolves the `ApprovalStore` promise, allowing the workflow to resume with the remaining stages.
 
-**Authentication**
+**Path parameters**
 
-This endpoint does not use `x-api-key`. Instead it verifies an HMAC-SHA256 signature. When `MC_WEBHOOK_SECRET` is set:
-
-1. MC signs the raw request body with the shared secret
-2. The signature is sent in the `X-MC-Signature` header as `sha256=<hex-digest>`
-3. ElevarusOS verifies the signature using a timing-safe comparison
-
-If `MC_WEBHOOK_SECRET` is not set, signature verification is skipped (useful for local development).
-
-**Handled events**
-
-| Event | Behavior |
-|-------|----------|
-| `task.updated` | If `task.status` is `"done"` or `"quality_review"`, routes approval to MCWorker, unblocking any workflow waiting for human sign-off |
-| `agent.*` | Logged for observability; no action taken |
-
-**Request body**
-
-```json
-{
-  "event": "task.updated",
-  "task": {
-    "id": 1042,
-    "status": "done",
-    "assigned_to": "elevarus-blog"
-  }
-}
-```
+| Parameter | Description |
+|-----------|-------------|
+| `jobId` | UUID of the job to approve |
 
 **Response**
 
 ```json
-{
-  "received": true,
-  "event": "task.updated"
-}
+{ "approved": true, "jobId": "a1b2c3d4-..." }
 ```
-
-MC expects a `2xx` response within 10 seconds. ElevarusOS acknowledges immediately and processes the event asynchronously.
 
 **Error responses**
 
 | Status | Condition |
 |--------|-----------|
-| 400 | Invalid JSON payload |
-| 401 | Missing `X-MC-Signature` header (when `MC_WEBHOOK_SECRET` is set) |
-| 401 | Signature does not match |
+| 404 | No pending approval for this job ID |
+
+**Example**
+
+```bash
+curl -X POST http://localhost:3001/api/jobs/a1b2c3d4-.../approve \
+  -H "x-api-key: $API_SECRET"
+```
+
+---
+
+### POST /api/jobs/:jobId/reject
+
+Rejects a job that is waiting at the `approval_notify` stage. Resolves the `ApprovalStore` promise with `false`, causing the Orchestrator to mark the job `rejected`.
+
+**Path parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `jobId` | UUID of the job to reject |
+
+**Response**
+
+```json
+{ "approved": false, "jobId": "a1b2c3d4-..." }
+```
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| 404 | No pending approval for this job ID |
+
+**Example**
+
+```bash
+curl -X POST http://localhost:3001/api/jobs/a1b2c3d4-.../reject \
+  -H "x-api-key: $API_SECRET"
+```
+
+---
+
+### POST /api/webhooks/slack/interactions
+
+Receives Slack Block Kit interactive button payloads (Approve/Reject buttons on the approval message). This endpoint is called by Slack — you do not call it directly.
+
+**Authentication**
+
+Verifies the `X-Slack-Signature` header using `SLACK_SIGNING_SECRET` when set. Skipped if the env var is absent (acceptable for local dev).
+
+**Handled actions**
+
+| `action_id` | Behavior |
+|-------------|----------|
+| `approve_job` | Calls `approvalStore.notifyApproval(jobId, true)` |
+| `reject_job` | Calls `approvalStore.notifyApproval(jobId, false)` |
+
+The `value` field on the button contains the `jobId`. After handling the action, ElevarusOS calls Slack's `response_url` to update the original message with the decision.
+
+**Response**
+
+Returns `200 OK` immediately (Slack requires acknowledgement within 3 seconds).
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| 401 | Invalid Slack signature (when `SLACK_SIGNING_SECRET` is set) |

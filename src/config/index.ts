@@ -22,8 +22,17 @@ export const config = {
   },
 
   clickup: {
-    apiToken: optional("CLICKUP_API_TOKEN", ""),
-    listId: optional("CLICKUP_LIST_ID", ""),
+    apiToken:      optional("CLICKUP_API_TOKEN",        ""),
+    teamId:        optional("CLICKUP_TEAM_ID",          ""),
+    webhookSecret: optional("CLICKUP_WEBHOOK_SECRET",   ""),
+    /**
+     * Legacy alias of `defaultListId`. Kept for the in-tree intake adapter
+     * (src/adapters/intake/clickup.adapter.ts) until that's migrated in
+     * Phase 5 of docs/prd-clickup-integration.md.
+     */
+    listId:        optional("CLICKUP_LIST_ID",          ""),
+    /** Fallback list when Slack write tools don't specify one (Phase 2). */
+    defaultListId: optional("CLICKUP_DEFAULT_LIST_ID",  process.env.CLICKUP_LIST_ID ?? ""),
   },
 
   microsoft: {

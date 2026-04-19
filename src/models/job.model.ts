@@ -7,6 +7,7 @@ export type JobStatus =
   | "running"
   | "awaiting_approval"
   | "approved"
+  | "rejected"
   | "failed"
   | "completed";
 
@@ -61,6 +62,15 @@ export interface Job {
 
   /** Publish handoff record (populated by the publish_placeholder stage) */
   publishRecord?: PublishRecord;
+
+  /**
+   * Free-form pass-through metadata carried from the originating MC task.
+   * Workflow stages use this to read external system identifiers like
+   * `clickupTaskId`, `clickupListId`, `clickupUrl` so they can post results
+   * back to the system that triggered the work. The intake adapter or API
+   * handler that creates the job is responsible for forwarding metadata here.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 export interface ApprovalState {
