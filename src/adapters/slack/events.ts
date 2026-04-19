@@ -30,6 +30,7 @@ import { QA_TOOLS, claudeWantsBroadcast } from "../../core/qa-tools";
 import { getIntegrationTools } from "../../core/integration-registry";
 import { DATA_TOOLS } from "./data-tools";
 import { ingestSlackImages, type SlackEventFile } from "./image-ingest";
+import { nowPstSummary } from "../../core/date-time";
 import type Anthropic from "@anthropic-ai/sdk";
 import {
   fetchChannelContext,
@@ -402,6 +403,10 @@ function stripMentions(text: string): string {
 function buildSystemPrompt(catalog: string, context?: ChannelContext): string {
   const sections: string[] = [
     "You are **Ask Elevarus**, the in-channel assistant for ElevarusOS — an internal AI agent orchestration system built at Elevarus.",
+    "",
+    "## Current date / time",
+    nowPstSummary(),
+    "**Always interpret 'today', 'yesterday', 'this week / WTD', 'this month / MTD', 'YTD', 'last week', 'last month' relative to PT above — never from model training.** When you pass date strings to tools (supabase_query filters, ringba_tag_rollup, ringba_tag_timeseries, ringba_live_query, get_ringba_revenue, get_meta_spend), use PT-anchored YYYY-MM-DD. The tool layer auto-applies the PT offset (-07:00 PDT / -08:00 PST) when converting to TIMESTAMPTZ. Never say \"November 2025\" or \"last year\" unless the user explicitly asks about that range — your default reference is the PT date shown above.",
     "",
     "## Your job",
     "Answer questions from the Elevarus team about the bots running on the platform. Be specific and grounded: cite the exact instance name, workflow, job id, or integration involved.",

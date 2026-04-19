@@ -1,39 +1,46 @@
 import { logger } from "../../core/logger";
 import { RingbaHttpClient } from "./client";
 import { RingbaRepository } from "./repository";
+import { getPstDateRange } from "../../core/date-time";
 import type { RingbaRevenueReport } from "./types";
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
-
-const fmt = (d: Date): string => d.toISOString().slice(0, 10);
+// All ranges are anchored to America/Los_Angeles so "WTD", "MTD", and "today"
+// match what a human in Elevarus's office (PT) expects, not UTC midnight.
 
 export function getMTDRange(): { startDate: string; endDate: string } {
-  const today = new Date();
-  return {
-    startDate: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`,
-    endDate:   fmt(today),
-  };
+  return getPstDateRange("mtd");
 }
 
 export function getWTDRange(): { startDate: string; endDate: string } {
-  const today = new Date();
-  const day   = today.getDay();                  // 0 = Sun
-  const diff  = day === 0 ? -6 : 1 - day;       // days back to Monday
-  const monday = new Date(today);
-  monday.setDate(today.getDate() + diff);
-  return { startDate: fmt(monday), endDate: fmt(today) };
+  return getPstDateRange("wtd");
 }
 
 export function getYTDRange(): { startDate: string; endDate: string } {
-  const today = new Date();
-  return { startDate: `${today.getFullYear()}-01-01`, endDate: fmt(today) };
+  return getPstDateRange("ytd");
 }
 
+/**
+ * Unified entry point — accepts both Ringba's legacy period names
+ * (mtd/wtd/ytd/custom) and the richer PT period names
+ * (today/yesterday/last_week/last_month/last_7d/last_30d/last_90d).
+ */
 export function getDateRange(period: string, start?: string, end?: string) {
-  if (period === "wtd") return getWTDRange();
-  if (period === "ytd") return getYTDRange();
-  if (period === "custom" && start && end) return { startDate: start, endDate: end };
-  return getMTDRange(); // default
+  const p = (period ?? "mtd").toLowerCase();
+  if (p === "custom" && start && end) return { startDate: start, endDate: end };
+  switch (p) {
+    case "today":      return getPstDateRange("today");
+    case "yesterday":  return getPstDateRange("yesterday");
+    case "wtd":        return getPstDateRange("wtd");
+    case "mtd":        return getPstDateRange("mtd");
+    case "ytd":        return getPstDateRange("ytd");
+    case "last_week":  return getPstDateRange("last_week");
+    case "last_month": return getPstDateRange("last_month");
+    case "last_7d":    return getPstDateRange("last_7d");
+    case "last_30d":   return getPstDateRange("last_30d");
+    case "last_90d":   return getPstDateRange("last_90d");
+    default:           return getPstDateRange("mtd");
+  }
 }
 
 // ─── Revenue report ───────────────────────────────────────────────────────────

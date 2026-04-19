@@ -9,6 +9,7 @@
 import { RingbaHttpClient } from "./client";
 import { auditQueryTool }   from "../../core/audit-log";
 import { getSupabaseClient } from "../../core/supabase-client";
+import { toPstIso }         from "../../core/date-time";
 import { logger }           from "../../core/logger";
 import type { QATool }      from "../../core/qa-tools";
 
@@ -200,10 +201,10 @@ interface TagRollupInput {
 const MAX_ROLLUP_ROWS = 10_000;
 
 function normaliseDate(s: string, endOfDay = false): string {
-  // YYYY-MM-DD → ISO at 00:00Z / 23:59:59Z; otherwise assume caller passed ISO.
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    return endOfDay ? `${s}T23:59:59Z` : `${s}T00:00:00Z`;
-  }
+  // YYYY-MM-DD in PT → ISO with live PT offset (-07:00 PDT / -08:00 PST).
+  // Never use Z/UTC — "2026-04-13" means midnight PT, which is 07:00Z, not
+  // 00:00Z (that'd be 5pm Sunday PT and blow up week-of calculations).
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return toPstIso(s, endOfDay);
   return s;
 }
 
