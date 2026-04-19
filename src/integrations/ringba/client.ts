@@ -16,6 +16,48 @@ import type {
  * default response, plus a few extras (publisherId, publisherSubId, etc.)
  * that we were previously dropping but want to keep.
  */
+/**
+ * Ringba's `/tags` endpoint returns ONLY system-defined tag types
+ * (Campaign, Publisher, Geo, Technology, Date, Time, InboundNumber, etc.).
+ * It does NOT enumerate custom User:* tags even when they're populated on
+ * the account — discovered empirically.
+ *
+ * To capture User:* tags on calls we have to ASK for them by name, so we
+ * ship a list of common tracking params that every account is likely to
+ * use. Additional account-specific names can be added via the
+ * RINGBA_USER_TAGS env var (comma-separated).
+ *
+ * If Ringba doesn't actually have a value for one of these, it simply
+ * isn't returned on the record — harmless. If a User:* tag is populated
+ * but not in this list, it's silently dropped — add it via env.
+ */
+const DEFAULT_USER_TAG_NAMES: readonly string[] = [
+  // Standard UTM parameters
+  "utm_campaign", "utm_content", "utm_source", "utm_medium", "utm_term",
+  "utm_id",
+  // Common click / ad IDs
+  "gclid", "wbraid", "gbraid",     // Google
+  "fbclid", "fbp", "fbc",          // Meta
+  "ttclid",                        // TikTok
+  "msclkid",                       // Microsoft / Bing
+  "yclid",                         // Yandex
+  "twclid",                        // X / Twitter
+  "li_fat_id",                     // LinkedIn
+  // Generic / Elevarus-common
+  "sub1", "sub2", "sub3", "sub4",
+  "pub_id", "source", "campaign", "content", "medium", "keyword",
+  "landing_page", "referrer", "affiliate_id", "aff_id", "clickid",
+  "transaction_id",
+];
+
+function loadUserTagNames(): string[] {
+  const extra = (process.env.RINGBA_USER_TAGS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return [...new Set([...DEFAULT_USER_TAG_NAMES, ...extra])];
+}
+
 const BASE_VALUE_COLUMNS: readonly string[] = [
   // Identity
   "inboundCallId",
@@ -158,7 +200,14 @@ export class RingbaHttpClient {
 
     const { startDate, endDate } = opts;
 
-    // Build valueColumns: base fields + all tags (or caller override).
+    // Build valueColumns: base fields + all enumerated tags + known User:* tags.
+    //
+    // Ringba's /tags endpoint only returns system-defined tag types (Campaign,
+    // Publisher, Geo, etc.) — User:* tags are NOT enumerated there even when
+    // populated. So we always request a known User:* tag list (UTMs, click
+    // IDs, affiliate params) alongside the enumerated system tags. Values
+    // Ringba doesn't have for a given call are simply omitted from the
+    // response and parseRecord drops them — harmless.
     let valueColumns: string[];
     if (opts.valueColumns && opts.valueColumns.length > 0) {
       valueColumns = [...opts.valueColumns];
@@ -168,6 +217,9 @@ export class RingbaHttpClient {
         const tags = await this.listTags();
         for (const t of tags) {
           columns.push(`tag:${t.tagType}:${t.tagName}`);
+        }
+        for (const name of loadUserTagNames()) {
+          columns.push(`tag:User:${name}`);
         }
       }
       valueColumns = columns;

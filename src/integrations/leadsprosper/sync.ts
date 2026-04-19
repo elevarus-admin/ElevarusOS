@@ -37,12 +37,12 @@ export class LeadsProsperSyncWorker {
   private inFlight = false;
 
   constructor(opts: {
-    cronExpr?:     string;   // default: every 15 minutes
-    overlapMs?:    number;   // default: 30 minutes re-pull overlap
+    cronExpr?:     string;   // default: every hour at :00
+    overlapMs?:    number;   // default: 90 minutes re-pull overlap (covers hourly cadence + LP post-route adjustments)
     lookbackDays?: number;   // default: 3 — cold-start window when no high-water mark
   } = {}) {
-    this.cronExpr     = opts.cronExpr     ?? "*/15 * * * *";
-    this.overlapMs    = opts.overlapMs    ?? 30 * 60 * 1000;
+    this.cronExpr     = opts.cronExpr     ?? "0 * * * *";
+    this.overlapMs    = opts.overlapMs    ?? 90 * 60 * 1000;
     this.lookbackDays = opts.lookbackDays ?? 3;
     this.enabled      = this.client.enabled && this.repo.enabled;
 

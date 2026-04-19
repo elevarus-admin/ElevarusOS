@@ -33,12 +33,12 @@ export class RingbaSyncWorker {
   private inFlight = false;
 
   constructor(opts: {
-    cronExpr?:     string;   // default: every 15 min
-    overlapMs?:    number;   // default: 30 min re-pull overlap
+    cronExpr?:     string;   // default: every hour at :00
+    overlapMs?:    number;   // default: 90 min re-pull overlap (covers hourly cadence + Ringba's post-call finalization window)
     lookbackDays?: number;   // default: 3 days cold-start window
   } = {}) {
-    this.cronExpr     = opts.cronExpr     ?? "*/15 * * * *";
-    this.overlapMs    = opts.overlapMs    ?? 30 * 60 * 1000;
+    this.cronExpr     = opts.cronExpr     ?? "0 * * * *";
+    this.overlapMs    = opts.overlapMs    ?? 90 * 60 * 1000;
     this.lookbackDays = opts.lookbackDays ?? 3;
     this.enabled      = this.client.enabled && this.repo.enabled;
 
