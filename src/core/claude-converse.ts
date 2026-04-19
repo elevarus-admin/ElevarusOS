@@ -71,7 +71,12 @@ export async function claudeConverse(opts: ClaudeConverseOptions): Promise<strin
 
 export interface ClaudeConverseWithToolsOptions {
   system:          string;
-  userMessage:     string;
+  /**
+   * The user's turn. Accepts either a plain string (text-only) or a Claude
+   * content-block array (text + image blocks, produced by
+   * src/adapters/slack/image-ingest.ts when the Slack event carries files).
+   */
+  userMessage:     string | Anthropic.ContentBlockParam[];
   traceId:         string;
   /** Tool specs + executors Claude can call. */
   tools:           QATool[];

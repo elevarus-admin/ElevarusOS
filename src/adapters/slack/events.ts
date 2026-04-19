@@ -29,6 +29,8 @@ import { IJobStore } from "../../core/job-store";
 import { QA_TOOLS, claudeWantsBroadcast } from "../../core/qa-tools";
 import { getIntegrationTools } from "../../core/integration-registry";
 import { DATA_TOOLS } from "./data-tools";
+import { ingestSlackImages, type SlackEventFile } from "./image-ingest";
+import type Anthropic from "@anthropic-ai/sdk";
 import {
   fetchChannelContext,
   renderContextBlock,
@@ -80,6 +82,8 @@ export interface AppMentionEvent {
   event_ts:   string;
   bot_id?:    string;
   app_id?:    string;
+  /** File attachments (screenshots, PDFs, etc.). Requires `files:read` scope. */
+  files?:     SlackEventFile[];
 }
 
 export interface MessageEvent {
@@ -94,6 +98,8 @@ export interface MessageEvent {
   bot_id?:       string;
   app_id?:       string;
   subtype?:      string;
+  /** File attachments (screenshots, PDFs, etc.). Requires `files:read` scope. */
+  files?:        SlackEventFile[];
 }
 
 /**
@@ -213,6 +219,7 @@ async function answerQuestion(
     channel:        event.channel,
     threadTs,
     question,
+    files:          event.files,
     traceId,
     deps,
     askerUserId:    event.user,
@@ -230,17 +237,20 @@ async function answerDM(
   // Ignore edits, deletions, joins, and bot-authored messages.
   if (event.subtype) return;
   if (!event.user)   return;
-  if (!event.text)   return;
+  // Allow image-only DMs — event.text is empty when the user sends just a
+  // file. We'll require either text OR a file to proceed.
+  if (!event.text && (!event.files || event.files.length === 0)) return;
 
-  const question = event.text.trim();
+  const question = (event.text ?? "").trim();
   const threadTs = event.thread_ts ?? event.ts;
   const traceId  = eventId || event.event_ts;
 
   logger.info("slack-events: DM", {
-    channel: event.channel,
-    user:    event.user,
-    ts:      event.ts,
-    chars:   question.length,
+    channel:     event.channel,
+    user:        event.user,
+    ts:          event.ts,
+    chars:       question.length,
+    attachments: event.files?.length ?? 0,
     traceId,
   });
 
@@ -248,6 +258,7 @@ async function answerDM(
     channel:        event.channel,
     threadTs,
     question,
+    files:          event.files,
     traceId,
     deps,
     askerUserId:    event.user,
@@ -261,6 +272,7 @@ async function respond(args: {
   channel:        string;
   threadTs:       string;
   question:       string;
+  files?:         SlackEventFile[];
   traceId:        string;
   deps:           SlackEventDeps;
   askerUserId:    string | undefined;
@@ -269,15 +281,16 @@ async function respond(args: {
   allowBroadcast: boolean;
 }): Promise<void> {
   const {
-    channel, threadTs, question, traceId, deps,
+    channel, threadTs, question, files, traceId, deps,
     askerUserId, currentTs, inThread, allowBroadcast,
   } = args;
 
-  if (question.length === 0) {
+  const hasFiles = Boolean(files && files.length > 0);
+  if (question.length === 0 && !hasFiles) {
     await postToSlack({
       channel,
       threadTs,
-      text: "Ask me a question — for example: _what does the HVAC reporting agent do?_",
+      text: "Ask me a question — for example: _what does the HVAC reporting agent do?_ You can also attach screenshots and I'll read them.",
     });
     return;
   }
@@ -286,25 +299,51 @@ async function respond(args: {
   let replyBroadcast = false;
 
   try {
-    const context = await fetchChannelContext({
-      channel,
-      askerUserId,
-      currentTs,
-      threadTs: inThread ? threadTs : undefined,
-    });
+    // Pull file attachments (screenshots, etc.) in parallel with channel context.
+    const [context, images] = await Promise.all([
+      fetchChannelContext({
+        channel,
+        askerUserId,
+        currentTs,
+        threadTs: inThread ? threadTs : undefined,
+      }),
+      ingestSlackImages(files, traceId),
+    ]);
 
     logger.debug("slack-events: context fetched", {
       traceId,
       messages: context.history.length,
       hasChannel: !!context.channel,
       hasAsker:   !!context.asker,
+      images:    images.stats.accepted,
     });
+
+    // Build the user turn. If images were attached and accepted, send a mixed
+    // content array (text + image blocks). Otherwise a plain string.
+    let userMessage: string | Anthropic.ContentBlockParam[];
+    if (images.blocks.length > 0) {
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      const textForBlock = question.length > 0
+        ? question
+        : "(No text — the user attached only image(s). Describe or answer about what's in the screenshot.)";
+      blocks.push({ type: "text", text: textForBlock });
+      blocks.push(...images.blocks);
+      if (images.stats.skipped > 0) {
+        blocks.push({
+          type: "text",
+          text: `(System note: ${images.stats.skipped} of ${images.stats.total} attached file(s) were skipped — reasons: ${JSON.stringify(images.stats.skippedReasons)}. Proceed with the accepted images.)`,
+        });
+      }
+      userMessage = blocks;
+    } else {
+      userMessage = question;
+    }
 
     const catalog = buildKnowledgeCatalog({ registry: deps.registry });
     const tools   = [...QA_TOOLS, ...DATA_TOOLS, ...getIntegrationTools()];
     const result  = await claudeConverseWithTools({
       system:        buildSystemPrompt(catalog, context),
-      userMessage:   question,
+      userMessage,
       traceId,
       tools,
       toolContext:   {
@@ -366,6 +405,9 @@ function buildSystemPrompt(catalog: string, context?: ChannelContext): string {
     "",
     "## Your job",
     "Answer questions from the Elevarus team about the bots running on the platform. Be specific and grounded: cite the exact instance name, workflow, job id, or integration involved.",
+    "",
+    "## You can see attached screenshots",
+    "When a user attaches an image (screenshot of a dashboard, Ringba UI, Meta Ads Manager, a spreadsheet, an error, a Slack message, etc.) it arrives inline on the user turn. Read it the same way you'd read text — describe what's in it, reconcile the numbers against live data via your tools, or answer whatever the user asked about it. If the user sends ONLY an image with no text, infer the intent (usually: \"tell me what this is\" or \"compare this to our numbers\"). Supported types: PNG, JPEG, GIF, WebP. PDFs and other attachments are skipped — if the system notes skipped files, mention it briefly so the user knows to re-upload as an image.",
     "",
     "## ElevarusOS has three layers",
     "1. **Instances (MC Agents)** — named bot deployments (e.g. `hvac-reporting`, `elevarus-blog`). Each has a brand, schedule, and optional integration config.",
