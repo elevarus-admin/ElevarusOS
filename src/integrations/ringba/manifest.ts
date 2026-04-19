@@ -6,7 +6,11 @@
  */
 
 import type { IntegrationManifest } from "../../core/integration-registry";
-import { ringbaLiveQueryTool } from "./live-tools";
+import {
+  ringbaLiveQueryTool,
+  ringbaTagRollupTool,
+  ringbaTagTimeseriesTool,
+} from "./live-tools";
 
 export const manifest: IntegrationManifest = {
   id:          "ringba",
@@ -79,15 +83,17 @@ export const manifest: IntegrationManifest = {
     },
   ],
 
-  liveTools: [ringbaLiveQueryTool],
+  liveTools: [ringbaLiveQueryTool, ringbaTagRollupTool, ringbaTagTimeseriesTool],
 
   systemPromptBlurb:
     "Ringba data lives in `ringba_calls` (one row per call with publisher_name, campaign_name, payout_amount, call_dt, has_payout, is_duplicate). " +
     "For revenue rollups prefer `supabase_query` with filters `has_payout = true AND is_duplicate = false` and aggregations on `payout_amount`. " +
     "The sync worker runs every 15 minutes — for fresher data or fields not in the schema, fall back to `ringba_live_query`. " +
-    "CUSTOM + SYSTEM TAGS: every call also has a `tag_values` JSONB column keyed 'TagType:TagName' (e.g. 'User:utm_campaign', 'User:utm_content', 'Geo:Country', 'Technology:OS', 'Date:ISODate'). " +
-    "Use `list_ringba_tags` to see what tag keys are actually populated on this account, then filter via `supabase_query` with " +
-    "`{ column: 'tag_values', op: 'jsonb_contains', value: { 'User:utm_campaign': 'spring_hvac' } }`. " +
+    "CUSTOM + SYSTEM TAGS: every call also has a `tag_values` JSONB column keyed 'TagType:TagName' (e.g. 'User:utm_campaign', 'User:utm_content', 'Publisher:Name', 'Geo:Country', 'Technology:OS', 'Date:ISODate'). " +
+    "For GROUPING / AGGREGATING by a tag value (revenue by utm_campaign, top utm_content by calls, RPC by publisher) use `ringba_tag_rollup` — it calls a server-side RPC that computes call_count, paid_calls, revenue, total_payout, and RPC (revenue per paid call) in one query. " +
+    "For TIME-BUCKETED trends of a tag (daily revenue per utm_campaign, hourly volume per publisher) use `ringba_tag_timeseries`. " +
+    "For FILTERING calls by a specific tag value (e.g. show me the calls where utm_campaign='x'), use `supabase_query` with `{ column: 'tag_values', op: 'jsonb_contains', value: { 'User:utm_campaign': 'spring_hvac' } }`. " +
+    "Call `list_ringba_tags` first to see what tag keys are actually populated on this account. " +
     "Note: User:* tags (utm_campaign, utm_content) populate only when Ringba is configured to capture them via URL-param capture or JS tag — if list_ringba_tags shows no User:* keys, the capture may not be set up yet.",
 
   exampleQuestions: [
