@@ -93,7 +93,13 @@ export class RingbaRepository {
       };
     });
 
-    const BATCH = 500;
+    // Batch size tuning note:
+    // Each row now carries full-API-record JSONB on `raw` + `routing_attempts`
+    // + GIN-indexed `tag_values`. With the old batch=500 setting, backfill hit
+    // Supabase's statement_timeout on large-JSONB inserts. 100 is comfortably
+    // under the threshold in practice. Roughly doubles round-trips in exchange
+    // for completing cleanly during hourly syncs and multi-month backfills.
+    const BATCH = 100;
     for (let i = 0; i < rows.length; i += BATCH) {
       const batch = rows.slice(i, i + BATCH);
       const { error } = await getSupabaseClient()
