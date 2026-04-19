@@ -84,11 +84,18 @@ export const manifest: IntegrationManifest = {
   systemPromptBlurb:
     "Ringba data lives in `ringba_calls` (one row per call with publisher_name, campaign_name, payout_amount, call_dt, has_payout, is_duplicate). " +
     "For revenue rollups prefer `supabase_query` with filters `has_payout = true AND is_duplicate = false` and aggregations on `payout_amount`. " +
-    "The sync worker runs every 15 minutes — for fresher data or fields not in the schema, fall back to the live Ringba API tool (once available).",
+    "The sync worker runs every 15 minutes — for fresher data or fields not in the schema, fall back to `ringba_live_query`. " +
+    "CUSTOM + SYSTEM TAGS: every call also has a `tag_values` JSONB column keyed 'TagType:TagName' (e.g. 'User:utm_campaign', 'User:utm_content', 'Geo:Country', 'Technology:OS', 'Date:ISODate'). " +
+    "Use `list_ringba_tags` to see what tag keys are actually populated on this account, then filter via `supabase_query` with " +
+    "`{ column: 'tag_values', op: 'jsonb_contains', value: { 'User:utm_campaign': 'spring_hvac' } }`. " +
+    "Note: User:* tags (utm_campaign, utm_content) populate only when Ringba is configured to capture them via URL-param capture or JS tag — if list_ringba_tags shows no User:* keys, the capture may not be set up yet.",
 
   exampleQuestions: [
     "What was our WTD Ringba revenue for the CHP and CLARO publishers across all campaigns?",
     "Which Ringba publisher drove the most paid calls yesterday?",
     "Show call volume by campaign for the last 7 days.",
+    "Revenue breakdown by utm_campaign for the last 30 days.",
+    "Top 5 utm_content values by paid-call count this week.",
+    "Which US state (Geo:SubDivisionCode) drove the most billable calls last month?",
   ],
 };

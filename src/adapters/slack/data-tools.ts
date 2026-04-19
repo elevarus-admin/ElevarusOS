@@ -347,6 +347,100 @@ const listRingbaCampaignsTool: QATool = {
   },
 };
 
+const listRingbaTagsTool: QATool = {
+  spec: {
+    name: "list_ringba_tags",
+    description:
+      "List the distinct tag keys actually present on Ringba calls over the last 90 days, with occurrence counts and a sample value. Use this BEFORE building a tag query so you pick the right key — the account's /tags endpoint lists all *defined* tags, but this tool shows which ones are *populated*. Keys are in the form 'TagType:TagName' (e.g. 'User:utm_campaign', 'Geo:Country'). Pair with `supabase_query` + `jsonb_contains` to filter calls by a tag value. Cached 5 min.",
+    input_schema: {
+      type: "object",
+      properties: {
+        tagTypePrefix: {
+          type: "string",
+          description:
+            "Optional filter — return only tag keys starting with this type. e.g. 'User' returns only custom user-defined tags (utm_*, etc.). Case-sensitive.",
+        },
+      },
+    },
+  },
+  async execute(input, ctx) {
+    const startedAt = Date.now();
+    const { tagTypePrefix } = (input as { tagTypePrefix?: string } | null) ?? {};
+    const cacheKey = `ringba_tag_keys:${tagTypePrefix ?? ""}`;
+
+    try {
+      const cached = cacheGet<Array<{ key: string; count: number; sample: string }>>(cacheKey);
+      if (cached) {
+        await auditQueryTool(ctx, {
+          tool_name:  "list_ringba_tags",
+          params:     { tagTypePrefix },
+          status:     "ok",
+          row_count:  cached.length,
+          elapsed_ms: Date.now() - startedAt,
+        });
+        return { tag_keys: cached, cached: true };
+      }
+
+      const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      const supabase = getSupabaseClient();
+      // Pull a recent slice of tag_values JSONB — client-side aggregation keeps
+      // this simple (no RPC needed). 5000 rows is plenty to see what tag keys
+      // are populated on the account.
+      const { data, error } = await supabase
+        .from("ringba_calls")
+        .select("tag_values")
+        .gte("call_dt", since)
+        .neq("tag_values", "{}")
+        .limit(5000);
+      if (error) throw new Error(error.message);
+
+      const counts   = new Map<string, number>();
+      const samples  = new Map<string, string>();
+      for (const row of (data ?? []) as Array<{ tag_values: Record<string, string> | null }>) {
+        const tv = row.tag_values;
+        if (!tv || typeof tv !== "object") continue;
+        for (const [k, v] of Object.entries(tv)) {
+          if (tagTypePrefix && !k.startsWith(`${tagTypePrefix}:`)) continue;
+          counts.set(k, (counts.get(k) ?? 0) + 1);
+          if (!samples.has(k) && typeof v === "string" && v.length > 0) {
+            samples.set(k, v.length > 80 ? v.slice(0, 80) + "…" : v);
+          }
+        }
+      }
+
+      const tagKeys = [...counts.entries()]
+        .map(([key, count]) => ({ key, count, sample: samples.get(key) ?? "" }))
+        .sort((a, b) => b.count - a.count);
+
+      cacheSet(cacheKey, tagKeys);
+
+      await auditQueryTool(ctx, {
+        tool_name:  "list_ringba_tags",
+        params:     { tagTypePrefix },
+        status:     "ok",
+        row_count:  tagKeys.length,
+        elapsed_ms: Date.now() - startedAt,
+      });
+
+      return {
+        tag_keys:          tagKeys,
+        scanned_row_count: (data ?? []).length,
+        window:            { since_days: 90 },
+        cached:            false,
+      };
+    } catch (err) {
+      await auditQueryTool(ctx, {
+        tool_name:     "list_ringba_tags",
+        params:        { tagTypePrefix },
+        status:        "error",
+        elapsed_ms:    Date.now() - startedAt,
+        error_message: String(err),
+      });
+      return { error: String(err) };
+    }
+  },
+};
+
 const listLpCampaignsTool: QATool = {
   spec: {
     name: "list_lp_campaigns",
@@ -395,5 +489,6 @@ export const DATA_TOOLS: QATool[] = [
   describeSchemaTool,
   listRingbaPublishersTool,
   listRingbaCampaignsTool,
+  listRingbaTagsTool,
   listLpCampaignsTool,
 ];
