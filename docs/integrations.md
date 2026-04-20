@@ -1,8 +1,8 @@
 # ElevarusOS Integration Reference
 
-This document covers the external integrations used by ElevarusOS agents: Ringba (call tracking and revenue), LeadsProsper (lead routing and attribution), Meta Ads (ad spend), Slack (notifications and report delivery), and Mission Control (task orchestration and agent management).
+This document covers the external integrations used by ElevarusOS agents: Ringba (call tracking and revenue), LeadsProsper (lead routing and attribution), Meta Ads (ad spend, live), Google Ads (ad spend, Supabase-synced), Slack (notifications and report delivery), and Mission Control (task orchestration and agent management).
 
-**Integration patterns.** All lead/call/revenue sources now use the **Supabase-backed pattern**: a sync worker pulls API data into Supabase on a cron; workflows read from a repository class. Meta Ads remains on the legacy live-API pattern (ad spend is low-volume enough that caching isn't necessary yet). See [data-platform.md](./data-platform.md) for the pattern spec.
+**Integration patterns.** Most data sources use the **Supabase-backed pattern**: a sync worker pulls API data into Supabase on a cron; workflows read from a repository class. Meta Ads is the exception — it stays on the live Graph API (ad spend is low-volume enough that caching isn't necessary yet). Google Ads ships Supabase-synced from day one because the Basic-tier API quota (15k ops/day) doesn't tolerate ad-hoc Slack queries. See [data-platform.md](./data-platform.md) for the pattern spec.
 
 ---
 
@@ -353,6 +353,106 @@ meta:
 ```
 
 The ad account ID is the per-agent identifier. If one ad account runs multiple unrelated verticals, use `campaignIds` to scope the spend to only the campaigns relevant to that agent.
+
+---
+
+## Google Ads
+
+**Source:** `src/integrations/google-ads/`
+
+Pulls ad spend from the Google Ads API across all sub-accounts under the Elevarus MCC (`989-947-7831`). Used alongside Meta Ads in P&L reporting workflows. Synced to Supabase nightly @ 02:00 PT — see [docs/prd-google-ads-integration.md](./prd-google-ads-integration.md) for the full design rationale.
+
+### Configuration
+
+| Env var | Description |
+|---------|-------------|
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | Developer token from MCC API Center: https://ads.google.com/aw/apicenter |
+| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | MCC ID, no dashes (`9899477831`). Sent as `login-customer-id` header on every request |
+| `GOOGLE_ADS_CLIENT_ID` | OAuth2 Desktop client ID from GCP Console → APIs & Services → Credentials |
+| `GOOGLE_ADS_CLIENT_SECRET` | Paired with client ID |
+| `GOOGLE_ADS_REFRESH_TOKEN` | Long-lived refresh token from a one-time OAuth flow. Run `npx ts-node scripts/google-ads-oauth.ts` to mint one — sign in as a user with access to the MCC |
+
+All five must be set for the integration to enable. Missing any → `GoogleAdsClient.enabled` is `false` and methods no-op (return `[]` / `null`).
+
+**Access tier:** Basic (15,000 ops/day) is sufficient for our use case (reading sub-accounts under our own MCC). Standard access is **not** required and would only be needed if we exposed this to third-party advertisers.
+
+### Supabase tables
+
+The sync worker maintains four tables (defined in `supabase/migrations/20260419000020_google_ads.sql`):
+
+| Table | Grain | Purpose |
+|-------|-------|---------|
+| `google_ads_customers` | one row per CID | Sub-account directory. `manager=false` filters to leaf advertiser accounts; `status='ENABLED'` excludes cancelled/closed |
+| `google_ads_daily_metrics` | one row per (customer, date) | **Primary** spend rollup. cost (USD) / impressions / clicks / conversions / ctr / avg_cpc |
+| `google_ads_campaign_metrics` | one row per (customer, campaign, date) | Same metrics broken out by campaign |
+| `google_ads_sync_runs` | one row per sync invocation | Run log — duration, rows upserted, customers synced/failed |
+
+### Sync worker
+
+`GoogleAdsSyncWorker` (in `src/integrations/google-ads/sync-worker.ts`) runs on a node-cron schedule from inside the daemon. Default: `0 2 * * *` in `America/Los_Angeles` (02:00 PT). Each tick pulls a 3-day rolling window per ENABLED leaf account, which absorbs Google's ~3h reporting lag and any late-attribution bumps.
+
+**Why no initial-on-boot run:** unlike Ringba (where API calls are essentially free), Google Ads counts every returned row against the daily quota. A startup-tick on each daemon restart would burn ~5k ops with no value over the next scheduled run.
+
+**Manual invocation:**
+
+```bash
+npm run sync:google-ads                    # default: 3-day window
+npm run sync:google-ads -- --days=90       # backfill 90 days
+npm run sync:google-ads -- --customer=8951980121   # one account only
+```
+
+### Primary function: `getCustomerSpend(opts)`
+
+Workflow-level reporting helper. Reads from Supabase, never the live API.
+
+```typescript
+import { getCustomerSpend } from '../integrations/google-ads';
+
+const report = await getCustomerSpend({
+  customerId: '8951980121',
+  startDate:  '2026-04-01',
+  endDate:    '2026-04-17',
+  // campaignIds omitted = total customer spend
+});
+```
+
+Returns `GoogleAdsSpendReport | null`. Mirrors the contract of `getAdAccountSpend` (Meta), so reporting workflows can pull both side-by-side.
+
+### Slack bot tools (live)
+
+Two tools contributed via the manifest, picked up automatically by the Q&A bot:
+
+- `google_ads_list_accounts` — Supabase-backed (live-API fallback if mirror is empty). Filters: `statusFilter[]`, `nameContains`, `includeManagers`. For all account-discovery questions.
+- `google_ads_today_spend` — live-API only, **bounded to today**. Use only when the user asks about intraday spend; the nightly sync covers everything else.
+
+Everything else (date-range spend, campaign breakdowns, joins to Ringba/LP) goes through the existing `supabase_query` tool, which auto-picks up the four `google_ads_*` tables from the manifest.
+
+### Instance config
+
+Reporting instances declare their sub-account in `instance.md`:
+
+```yaml
+googleAds:
+  customerId: "8951980121"   # SaveOnMyQuote HVAC — dashes auto-stripped on load
+  campaignIds: []            # empty = total customer spend
+```
+
+The customer ID is the per-agent identifier. Like Meta, multiple agents can share a single set of `GOOGLE_ADS_*` env vars.
+
+### Sub-account directory
+
+Top sub-accounts under MCC `989-947-7831` as of the initial sync (run `npm run sync:google-ads` to refresh):
+
+| CID | Name |
+|-----|------|
+| `8951980121` | SaveOnMyQuote.com - HVAC |
+| `2030848149` | SaveOnMyQuote.com - Final Expense |
+| `5429908344` | SaveOnMyQuote.com - Timeshare |
+| `6475741945` | Claro ACA-Private-Health Account 1 |
+| `8420957497` | Claro Health Ad Account Medicare |
+| `9221668405` | SOMQ_Auto Insurance |
+
+Use `google_ads_list_accounts` for the full live list.
 
 ---
 

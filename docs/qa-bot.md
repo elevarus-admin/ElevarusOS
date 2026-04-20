@@ -5,8 +5,8 @@ assistant that answers questions about ElevarusOS state, instances, workflows,
 and integrations.
 
 - **Owner:** Shane McIntyre / Elevarus
-- **Status:** Draft v1
-- **Last updated:** 2026-04-17
+- **Status:** Draft v1.1
+- **Last updated:** 2026-04-18 (v1.1: ClickUp write-tools carve-out)
 
 ---
 
@@ -43,7 +43,7 @@ job store.
 - Claude-generated answers grounded in:
   - Instance catalog (`src/instances/*/instance.md`, `MISSION.md`, `soul.md`)
   - Workflow registry (types + stage sequences)
-  - Integration catalog (Ringba, Meta, LeadsProsper capabilities)
+  - Integration catalog (Ringba, Meta, Google Ads, LeadsProsper, ClickUp, Everflow, Thumbtack capabilities)
   - Live job store (`/api/jobs`, `/api/jobs/:id/output`)
 - Channel-aware context (last ~20 messages + channel name/purpose)
 - Structured audit trail: every question becomes a `qa` job in the job store
@@ -53,9 +53,19 @@ job store.
 - Slash commands, interactive buttons, modals
 - Multi-workspace OAuth / app-store distribution
 - Proactive messaging (bot speaks unprompted)
-- Write actions (approving jobs, kicking off a workflow, editing state)
+- Write actions to **ElevarusOS or MC state** (approving jobs, kicking off a workflow, editing instance config)
 - Streaming replies (Slack rewrites tokens poorly; we post a single message)
 - File uploads / attachments (images, CSVs)
+
+### Carved-in (v1.1) — ClickUp write tools
+
+The blanket "no write actions" rule is narrowed: **ClickUp** is allowed to expose write tools via its integration manifest (`clickup_create_task`, `clickup_update_task`, `clickup_add_comment`, `clickup_trigger_agent`). Rationale:
+
+- ClickUp is an external task tracker, not internal ElevarusOS state. A bad write damages a ticket, not the orchestrator.
+- Writes use a shared `CLICKUP_API_TOKEN`. Per-user attribution is preserved in our audit log (`slack.userId` + `slack.channelId` on every call) even though ClickUp itself shows a single token-owner.
+- `clickup_trigger_agent` is the bridge that lets a Slack user say "have the U65 bot pick this up" — it creates an MC task, but only against an existing ClickUp task and only against agents already in `listInstanceIds()`. It does not let Slack users mint workflows out of nothing.
+
+Approving jobs, editing instance configs, and starting workflows from scratch (without a ClickUp task as the origin) remain out of scope until per-user auth lands. See [docs/prd-clickup-integration.md](./prd-clickup-integration.md) §4 for the full tool inventory and audit requirements.
 
 ---
 
@@ -107,7 +117,8 @@ Tools available to Claude (via new claudeConverse()):
 | Context budget | Channel history capped at 20 msgs / ~6k tokens; catalog summarised, not dumped | Prevents runaway token spend on busy channels. |
 | Where knowledge lives | Read at query time, not cached | Instance markdown files are small; job store is already indexed. Avoids cache-staleness when an instance is edited. |
 | Ephemeral vs public reply | Public in-thread; ephemeral only for errors | Answers are useful to the whole channel; prevents repeat questions. |
-| Auth | Any workspace member in invited channels; no per-user ACL in v1 | Matches current trust model. Add ACL when write-actions land. |
+| Auth | Any workspace member in invited channels; no per-user ACL in v1 | Matches current trust model. Add ACL when broader write-actions land. |
+| ClickUp writes | Allowed (v1.1) via shared token, audited per-Slack-user | External system, not internal state. Audit trail covers attribution gap. See ClickUp PRD §4. |
 
 ---
 
@@ -178,8 +189,11 @@ Total: **~7–9 working days** to a production-ready v1.
    with a hard failure if exceeded.
 3. **Channel history privacy** — the bot will read history of channels it's
    invited to. Document this in the Slack app install notes.
-4. **Write actions** (approving jobs, kicking off a workflow from Slack) — is
-   explicitly deferred; needs per-user auth via Slack user → MC user mapping.
+4. **Write actions to ElevarusOS / MC state** (approving jobs, kicking off a
+   workflow from scratch) remain deferred; needs per-user auth via Slack
+   user → MC user mapping. **ClickUp writes are carved in for v1.1** (see §2)
+   because they touch an external tracker and are covered by audit logging
+   under the shared token.
 5. **Multi-workspace** — v1 assumes a single Elevarus workspace. Schema
    already supports `team_id` if we extend later.
 6. **Latency budget** — Slack expects the webhook to 200 within 3 s. The

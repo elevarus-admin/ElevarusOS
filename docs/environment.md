@@ -38,6 +38,24 @@ Ad account IDs are **not** set here — they are configured per-agent in `instan
 
 ---
 
+## Google Ads
+
+All five variables must be set together for the Google Ads integration to enable. Any missing → `GoogleAdsClient.enabled` is `false` and methods no-op silently.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | Optional | — | 22-char token from the MCC API Center: https://ads.google.com/aw/apicenter. One per company. Apply for **Basic** access (15k ops/day) — Standard is not required for reading sub-accounts in our own MCC |
+| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Optional | — | MCC ID, no dashes (`9899477831`). Sent as `login-customer-id` header on every request to scope to the manager hierarchy |
+| `GOOGLE_ADS_CLIENT_ID` | Optional | — | OAuth2 client ID. Create a "Desktop app" credential in GCP Console → APIs & Services → Credentials |
+| `GOOGLE_ADS_CLIENT_SECRET` | Optional | — | Paired with client ID |
+| `GOOGLE_ADS_REFRESH_TOKEN` | Optional | — | Long-lived refresh token from a one-time OAuth flow. Mint with `npx ts-node scripts/google-ads-oauth.ts` — sign in as a Google account with access to the MCC |
+
+Customer IDs (sub-account CIDs) are **not** set here — they are configured per-agent in `instance.md` under `googleAds.customerId`. One set of env vars covers every sub-account under the MCC.
+
+**Smoke test:** `npx ts-node scripts/google-ads-smoke-test.ts` enumerates every sub-account under the MCC and confirms credentials are wired correctly.
+
+---
+
 ## Slack
 
 | Variable | Required | Default | Description |
@@ -156,6 +174,17 @@ RINGBA_ACCOUNT_ID=
 # One token covers all ad accounts the System User has been granted access to.
 # Ad account IDs are configured per-agent in instance.md (not here).
 META_ACCESS_TOKEN=
+
+# ─── Google Ads (optional — enables ad spend data for P&L reporting) ─────────
+# Developer token from MCC API Center: https://ads.google.com/aw/apicenter
+# Apply for Basic access (15k ops/day). MCC ID covers all sub-accounts.
+# Mint REFRESH_TOKEN once: npx ts-node scripts/google-ads-oauth.ts
+# Customer IDs (sub-account CIDs) are configured per-agent in instance.md.
+GOOGLE_ADS_DEVELOPER_TOKEN=
+GOOGLE_ADS_LOGIN_CUSTOMER_ID=
+GOOGLE_ADS_CLIENT_ID=
+GOOGLE_ADS_CLIENT_SECRET=
+GOOGLE_ADS_REFRESH_TOKEN=
 
 # ─── Orchestrator (optional overrides) ───────────────────────────────────────
 MAX_STAGE_RETRIES=2

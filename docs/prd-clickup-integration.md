@@ -1,8 +1,9 @@
 # PRD: ClickUp Integration
 
-**Status:** Draft  
-**Author:** Shane McIntyre  
-**Date:** 2026-04-17  
+**Status:** Draft v2
+**Author:** Shane McIntyre
+**Date:** 2026-04-18
+**Supersedes:** v1 (2026-04-17)
 **Audience:** ElevarusOS engineering team
 
 ---
@@ -11,359 +12,220 @@
 
 | Item | Value |
 |---|---|
-| **Env vars** | `CLICKUP_API_TOKEN`, `CLICKUP_WEBHOOK_SECRET`, `CLICKUP_TEAM_ID` |
-| **Inbound endpoint** | `POST /webhooks/clickup` |
-| **New client** | `src/integrations/clickup/client.ts` |
-| **New types** | `src/integrations/clickup/types.ts` |
-| **New stage** | `src/workflows/stages/clickup-sync.stage.ts` |
-| **Config extension** | `InstanceClickUp` block in `src/core/instance-config.ts` |
-| **Cache file** | `data/clickup-spaces.json` (list/space IDs, no Supabase) |
-| **ClickUp API base** | `https://api.clickup.com/api/v2` |
-| **Auth header** | `Authorization: {CLICKUP_API_TOKEN}` |
-| **Webhook verification** | HMAC-SHA256 via `X-Signature` header |
+| Integration dir | `src/integrations/clickup/` |
+| Manifest entry | `src/core/integration-registry.ts` (push `clickupManifest`) |
+| Env vars | `CLICKUP_API_TOKEN`, `CLICKUP_TEAM_ID`, `CLICKUP_WEBHOOK_SECRET`, `CLICKUP_DEFAULT_LIST_ID` |
+| Inbound endpoint | `POST /api/webhooks/clickup` (Express, HMAC-SHA256 verified) |
+| Outbound stage | `src/workflows/stages/clickup-sync.stage.ts` |
+| Slack surface | Claude `liveTools[]` on the integration manifest — read + write |
+| Static catalog | `data/clickup-spaces.json` (team / space / list IDs) |
+| Storage | None in Supabase. `clickupTaskId` lives on `job.metadata` |
+| ClickUp API | `https://api.clickup.com/api/v2`, header `Authorization: {CLICKUP_API_TOKEN}` |
+| Legacy code | `src/adapters/intake/clickup.adapter.ts` (deprecated, see §10) |
 
 ---
 
-## 1. Overview and Problem Statement
+## Decisions Locked In (vs. v1)
 
-ElevarusOS currently operates as a closed loop: agents run on schedule or on MC task assignment, produce outputs, and post to Slack. There is no connection between the team's primary project management tool (ClickUp) and the agent orchestration layer.
-
-This creates three friction points:
-
-1. **Manual task creation.** When a human creates a ClickUp task and wants an agent to act on it, they must separately log into MC, create a task, assign it to an agent, and wait. There is no automated bridge.
-2. **No closed-loop feedback.** When an agent workflow completes, results go to Slack only. ClickUp tasks that spawned the work never get updated with status, output summaries, or completion comments.
-3. **Slack bot isolation.** The Slack bot being built has no way to surface or manipulate ClickUp tasks, so users cannot query task state or trigger agent work through a single interface.
-
-The integration addresses all three by establishing a two-way channel: ClickUp can trigger ElevarusOS jobs, and ElevarusOS workflows can create, update, and comment on ClickUp tasks. The Slack bot surfaces both directions.
+1. **Slack bot interacts via Claude tools, not REST endpoints.** ClickUp ships its capabilities as `liveTools[]` on the integration manifest, the same path Ringba uses ([src/integrations/ringba/manifest.ts:86](../src/integrations/ringba/manifest.ts:86)). Ask Elevarus picks them up automatically through `getIntegrationTools()` ([src/core/integration-registry.ts:114](../src/core/integration-registry.ts:114)). v1's parallel REST API (`POST /api/clickup/tasks`, etc.) is dropped.
+2. **Read is the primary value; writes are a small secondary surface.** The headline use is the Slack bot **surfacing** ClickUp tasks — triage, status, "what's due," "who has overdue," progress checks. Writes (create / update / comment) are kept in scope but explicitly de-prioritized: they ship in Phase 2 only after Phase 1 reads are solid, and `clickup_create_task` in particular is a low-volume fallback, not a daily driver.
+3. **Write tools use the shared token; ElevarusOS is always the assigner.** Any task or comment ElevarusOS writes appears in ClickUp under the `CLICKUP_API_TOKEN` owner — i.e. ElevarusOS itself, not the human who triggered it. Per-user OAuth is deferred. The Slack `userId` is logged on every write so attribution lives in our audit trail.
+4. **Inbound agent resolution uses contextual cues, not a required custom field.** When a ClickUp webhook fires, the agent is resolved by (a) the list the task lives in (each instance declares `clickup.listId`), then (b) task tags, then (c) assignee usernames matched against the member directory. No `ElevarusAgent` custom field required. If nothing resolves, the event is logged and dropped.
+5. **No auto-comment on job start.** `commentOnStart` is dropped from the config entirely — too chatty for scheduled jobs, and Phase-3 outbound comments cover the useful case (completion / failure summary). Workflows that want a start comment can add `clickup_add_comment` as an explicit early stage.
+6. **Public URL: ngrok now, real domain at production rollover.** Webhook registration and any Slack callbacks point to `https://commotion-ecology-lion.ngrok-free.dev` (the existing `ELEVARUS_PUBLIC_URL`). This URL **will change at production rollout** — webhook registrations on the ClickUp side will need to be re-pointed at that time. Track as a launch-checklist item, not a code change.
+7. **Legacy intake adapter stays parked.** `src/adapters/intake/clickup.adapter.ts` keeps working in `--once` mode and the Scheduler's MC-fallback path. It's flagged deprecated in this PRD and migrated in Phase 5; nothing in Phase 1–4 touches it.
 
 ---
 
-## 2. Goals and Non-Goals
+## 1. Problem
+
+ElevarusOS is closed-loop today: agents run on schedule or on MC task assignment, output goes to Slack, and Slack is read-only. ClickUp is the team's primary task tracker but has no bridge:
+
+- A team member who wants an agent to act on a ClickUp task has to leave ClickUp, log into MC, and recreate the task.
+- Workflow output never finds its way back to the originating ClickUp task — the trail dies in Slack.
+- The Slack bot can answer questions about agents and metrics but can't surface or act on ClickUp work.
+
+This PRD establishes a two-way channel: ClickUp can trigger ElevarusOS jobs, workflows can update ClickUp tasks, and the Slack bot becomes the primary interactive surface for both directions.
+
+---
+
+## 2. Goals & Non-Goals
 
 ### Goals
 
-- Inbound: ClickUp webhook events create MC tasks and trigger agent workflows automatically
-- Outbound: Any workflow stage can create, update, or comment on a ClickUp task via a shared `ClickUpHttpClient`
-- Slack: The Slack bot can create ClickUp tasks, query task status, and trigger agent workflows — all via ElevarusOS API
-- Store `clickupTaskId` on the `Job` metadata and in `instance.md` config; no dedicated Supabase table
-- Follow the existing integration pattern established by `src/integrations/ringba/` exactly
-- Webhook endpoint verifies ClickUp signatures before processing any payload
-- Phased rollout: outbound first, inbound second, Slack commands third
+- **Slack-first.** Users can list, get, create, comment on, and update ClickUp tasks via `@Elevarus` mentions and DMs.
+- **Workflows can write back.** Any workflow can opt into a `clickup-sync` terminal stage that posts a completion comment and updates task status.
+- **Inbound automation.** A ClickUp task created or assigned to a known agent automatically becomes an MC task and queues a job.
+- **One integration directory.** All ClickUp code lives under `src/integrations/clickup/` and registers via the manifest pattern.
+- **Webhooks are HMAC-verified before any payload work.**
+- **Audit trail.** Every Slack-initiated write logs Slack user ID + channel ID alongside the ClickUp task ID via the existing `auditQueryTool` pattern.
 
 ### Non-Goals
 
-- Syncing ClickUp data to Supabase for reporting or analytics
-- Replacing MC as the task management layer — ClickUp events create MC tasks, not bypass them
-- Full ClickUp project management UI or two-way sync of all ClickUp fields
-- Supporting multiple ClickUp workspaces (single `CLICKUP_TEAM_ID` only)
-- Real-time ClickUp data in the ElevarusOS dashboard
+- Mirroring ClickUp data into Supabase for analytics.
+- Replacing MC as the task layer. ClickUp events create MC tasks; MC remains the orchestrator.
+- Multi-workspace ClickUp support. One `CLICKUP_TEAM_ID` only.
+- Per-user ClickUp OAuth in v1 (see Decision 2).
+- Any UI surface in the dashboard.
 
 ---
 
-## 3. User Stories
+## 3. Topology
 
-### Human in ClickUp
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                            CLICKUP                                 │
+│   Spaces · Lists · Tasks · Statuses · Comments · Webhooks          │
+└──────────────────┬───────────────────────┬─────────────────────────┘
+                   │ webhook (inbound)      │ REST (outbound)
+                   ▼                        ▲
+┌────────────────────────────────────────────────────────────────────┐
+│                       ElevarusOS Express API                       │
+│                                                                    │
+│  POST /api/webhooks/clickup                                        │
+│  └─ HMAC-SHA256 verify (CLICKUP_WEBHOOK_SECRET)                    │
+│      └─ webhook-handler.ts → resolve agent → MCClient.createTask   │
+│                                                                    │
+│              ▲                                                     │
+│              │  (no public REST surface for ClickUp — Slack uses   │
+│              │   the Claude tool path below)                       │
+│                                                                    │
+│  src/integrations/clickup/                                         │
+│    ├─ client.ts       ClickUpHttpClient (raw REST, retries)        │
+│    ├─ types.ts        ClickUpTask / Comment / Webhook shapes       │
+│    ├─ manifest.ts     IntegrationManifest with liveTools[]         │
+│    ├─ live-tools.ts   QATool[]: list / get / create / update / ... │
+│    └─ webhook-handler.ts                                           │
+│                                                                    │
+│  src/workflows/stages/clickup-sync.stage.ts                        │
+│    (opt-in terminal stage; no-ops if instance.clickup.syncEnabled  │
+│     is false or job.metadata.clickupTaskId is missing)             │
+└────────────────────────────────────────────────────────────────────┘
+              ▲                                       │
+              │                                       ▼
+┌──────────────┴───────────────┐           ┌─────────────────────────┐
+│   Slack Events API           │           │   MCWorker → Workflow   │
+│   (@Elevarus mentions, DMs)  │           │   stages → Slack post   │
+│   tool calls Claude makes    │           │                         │
+│   resolve to ClickUp methods │           │                         │
+└──────────────────────────────┘           └─────────────────────────┘
+```
 
-| ID | Story | Acceptance Criteria |
+The Slack bot does **not** call new REST endpoints. It calls Claude tools that the manifest contributes. This matches the existing pattern and keeps the API surface small.
+
+---
+
+## 4. Slack Bot ↔ ClickUp (Primary Surface)
+
+### Target use cases (drives the tool surface)
+
+These are the questions a user should be able to ask `@Elevarus` and have answered without leaving Slack. The tool inventory below is sized to cover all of them.
+
+**Triage / status (read):**
+- "Who has tasks due today?"
+- "Who has overdue tasks?" / "Show me overdue tasks for the marketing list."
+- "What's on Shane's plate this week?"
+- "What's the status of the Q3 deck task?"
+- "Show me everything in the marketing list still in `In Progress`."
+
+**Action (write):**
+- "Create a new task for Shane to update the Q3 deck, due Friday."
+- "Add a comment to <task> saying the data is wrong."
+- "Move the Q3 deck task to `Review`."
+- "Have the U65 reporting bot pick up <task>."
+
+The "who has X" questions force a **member directory** — Claude needs to map "Shane" → ClickUp user ID for both filters and assignment. Without it, every assignee question becomes a guessing game. See `clickup_list_members` and `data/clickup-spaces.json.members` below.
+
+The "due today" / "overdue" questions force **multi-list aggregation** with date filters — a single list query isn't enough when the user doesn't specify a list. See `clickup_find_tasks`.
+
+### Tool inventory (all on `clickupManifest.liveTools`)
+
+| Tool name | Mode | Purpose |
 |---|---|---|
-| CU-01 | As a team member, I create a ClickUp task in a watched list and expect the assigned agent to begin work automatically. | Webhook fires within 30s; MC task created; agent job starts; ClickUp task receives a comment confirming job start. |
-| CU-02 | As a team member, I update a ClickUp task's status to a configured trigger value and expect the agent workflow to re-run or advance. | `taskStatusUpdated` event received; mapped MC task status updated; orchestrator responds per status mapping table. |
-| CU-03 | As a team member, I assign a ClickUp task to an agent-named assignee and expect ElevarusOS to detect the assignment and dispatch accordingly. | `taskAssigned` event parsed; `assigned_to` extracted; MC task created with correct agent name. |
-| CU-04 | As a team member, after an agent workflow completes I want to see a summary comment on the original ClickUp task. | `clickup-sync` stage posts completion comment; ClickUp task status updated per `statusMap` config. |
+| `clickup_list_lists` | read | Returns the catalog from `data/clickup-spaces.json` so Claude can resolve "the marketing list" → real list ID. |
+| `clickup_list_members` | read | Returns the member directory from `data/clickup-spaces.json.members` — `{ id, username, email, slackUserId? }`. Lets Claude resolve "Shane" / `<@U123>` → ClickUp user ID. |
+| `clickup_list_tasks` | read | `GET /list/{listId}/task` with status / assignee / date filters. Single-list query. |
+| `clickup_find_tasks` | read | Cross-list query via `GET /team/{teamId}/task` (Filtered Team Tasks). Filters: `assignees[]`, `dueDate` (`overdue` \| `today` \| `this_week` \| `{ from, to }`), `statuses[]`, `lists[]`, `includeClosed`. **This is the tool for "who has overdue tasks today" — call it without a `lists[]` filter to span the workspace.** |
+| `clickup_get_task` | read | `GET /task/{taskId}`. Includes status, assignees, custom fields, comments count. |
+| `clickup_get_task_comments` | read | `GET /task/{taskId}/comment`. Returns recent comment thread. |
+| `clickup_create_task` | **write** | `POST /list/{listId}/task`. Required: `listId`, `name`. Optional: `description`, `assignees[]` (ClickUp user IDs — resolve via `clickup_list_members` first), `status`, `dueDate` (ISO or natural-language like `"friday"` resolved against PT today), `priority`, `tags[]`, `agentInstanceId` (when present, also queues an MC task). |
+| `clickup_update_task` | **write** | `PUT /task/{taskId}`. Patches name / description / status / dueDate / assignees (with `add`/`rem` semantics ClickUp expects). |
+| `clickup_add_comment` | **write** | `POST /task/{taskId}/comment`. Optional `assignee` to assign the comment. |
+| `clickup_trigger_agent` | **write** | Links an existing ClickUp task to an instance, creates an MC task with `metadata.clickupTaskId`, returns `{ jobId, mcTaskId }`. |
 
-### ElevarusOS Agent (Workflow / Orchestrator)
+`clickup_trigger_agent` is the bridge that makes "have the U65 reporting bot pick this up" work in Slack. It validates `agentInstanceId` against `listInstanceIds()` and rejects unknown agents with a hint.
 
-| ID | Story | Acceptance Criteria |
-|---|---|---|
-| AG-01 | As a reporting agent, after completing my workflow I create a ClickUp task in the configured list summarizing the run results. | Outbound `POST /task` to ClickUp API succeeds; task ID stored in `job.metadata.clickupTaskId`. |
-| AG-02 | As any agent, when my workflow fails I update the ClickUp task that triggered me to a failure status. | `ClickUpHttpClient.updateTaskStatus()` called with `statusMap.failed`; comment added with error summary. |
-| AG-03 | As any agent, I can optionally include `clickup-sync` as a terminal stage in my workflow definition without coupling my core stages to ClickUp. | Stage is opt-in per workflow definition; skipped cleanly if `clickup.syncEnabled` is false in instance config. |
+### Date-filter semantics for `clickup_find_tasks`
 
-### Slack Bot User
+Date references are interpreted in **PT** to match the existing system-prompt date convention ([src/adapters/slack/events.ts:409](../src/adapters/slack/events.ts:409)). The tool layer converts to ClickUp's expected millisecond timestamps.
 
-| ID | Story | Acceptance Criteria |
-|---|---|---|
-| SB-01 | As a Slack user, I send a command to create a ClickUp task and optionally trigger an agent workflow. | Bot calls `POST /api/clickup/tasks`; task created in ClickUp; if agent specified, MC task created and job queued. |
-| SB-02 | As a Slack user, I query the status of a ClickUp task by ID or name. | Bot calls `GET /api/clickup/tasks/:taskId`; ElevarusOS proxies ClickUp API; current status returned to Slack. |
-| SB-03 | As a Slack user, I link an existing ClickUp task to an agent and trigger a workflow run. | Bot calls `POST /api/clickup/tasks/:taskId/trigger`; MC task created; job queued with `clickupTaskId` in metadata. |
-
----
-
-## 4. Integration Architecture
-
-### Two-Way Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          CLICKUP                                    │
-│  Lists / Tasks / Custom Fields / Statuses / Webhooks                │
-└────────────────────┬──────────────────────┬─────────────────────────┘
-                     │ Webhook (inbound)     │ REST API calls (outbound)
-                     ▼                       ▲
-┌─────────────────────────────────────────────────────────────────────┐
-│                        ElevarusOS Express API                       │
-│                                                                     │
-│  POST /webhooks/clickup          GET|POST /api/clickup/*            │
-│  (HMAC-SHA256 verified)          (Slack bot consumer)               │
-│           │                               ▲                         │
-│           ▼                               │                         │
-│   ClickUp Webhook Handler         ClickUpHttpClient                 │
-│   src/integrations/clickup/       src/integrations/clickup/         │
-│   webhook-handler.ts              client.ts                         │
-│           │                               ▲                         │
-│           ▼                               │                         │
-│       MC Client                   clickup-sync.stage.ts             │
-│   (creates MC task,               (optional terminal stage          │
-│    assigns agent)                  in any workflow)                 │
-│           │                               ▲                         │
-│           ▼                               │                         │
-│       MC Worker  ──────────►  Orchestrator  ──────────►  Slack      │
-│   (polls, dispatches)         (runs stages)             (publish)   │
-└─────────────────────────────────────────────────────────────────────┘
-                     ▲
-                     │  POST /api/clickup/*
-┌────────────────────┴────────────────────────────────────────────────┐
-│                         Slack Bot (external)                        │
-│             Reads/creates tasks, triggers agent workflows           │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 5. Inbound Flow: ClickUp → ElevarusOS
-
-### Sequence
-
-```
-ClickUp task event
-        │
-        ▼
-POST /webhooks/clickup
-        │
-        ├─ Verify X-Signature header (HMAC-SHA256)
-        │   └─ 401 if invalid
-        │
-        ├─ Parse ClickUpWebhookEvent (event type + task payload)
-        │
-        ├─ Route by event type (see Event Mapping, §11)
-        │
-        ├─ Extract agent name from task assignee or custom field
-        │
-        ├─ Verify agent name maps to a known instance ID
-        │   └─ Log warning and 200 if no match (avoid webhook retry storms)
-        │
-        ├─ MCClient.createTask({
-        │     title: clickup task name,
-        │     assigned_to: agentInstanceId,
-        │     metadata: { clickupTaskId, clickupListId, clickupSpaceId }
-        │   })
-        │
-        ├─ Optionally: ClickUpHttpClient.addComment(taskId, "Job queued: <jobId>")
-        │
-        └─ Return 200 immediately (async job dispatch)
-```
-
-### Key Rules
-
-- Always return `200` to ClickUp after signature verification, regardless of downstream success. Returning non-200 triggers ClickUp retries.
-- The webhook handler must be non-blocking: create the MC task and return. Do not await job completion.
-- If the MC task creation fails, log the error and still return `200`. Failed inbound events should surface in ElevarusOS logs, not ClickUp retry queues.
-- Agent name resolution: check the ClickUp task's `assignees[].username` or a dedicated custom field (e.g. `ElevarusAgent`) against the list of known instance IDs from `listInstanceIds()`.
-
----
-
-## 6. Outbound Flow: ElevarusOS → ClickUp
-
-### Trigger Points
-
-| Trigger | Action |
+| Filter value | Resolves to |
 |---|---|
-| Workflow stage completes successfully | `clickup-sync.stage.ts` posts completion comment, updates status |
-| Workflow job fails | `clickup-sync.stage.ts` posts error comment, updates status to failure value |
-| Slack bot command (create task) | `POST /api/clickup/tasks` route calls `ClickUpHttpClient.createTask()` |
-| Slack bot command (trigger workflow) | `POST /api/clickup/tasks/:id/trigger` creates MC task with `clickupTaskId` in metadata |
+| `overdue` | `due_date_lt = start of today PT` AND `status != closed/done equivalent` |
+| `today` | `due_date_gt = start of today PT − 1ms`, `due_date_lt = end of today PT + 1ms` |
+| `this_week` | Monday 00:00 PT through Sunday 23:59:59 PT (current week, Mon-anchored) |
+| `{ from: "YYYY-MM-DD", to: "YYYY-MM-DD" }` | Inclusive PT date range |
 
-### `clickup-sync.stage.ts` Behavior
+"Closed" detection: ClickUp marks status `type: "closed"` and `type: "done"` as terminal. The tool excludes both for `overdue` unless `includeClosed: true`.
 
-- Stage name: `clickup-sync`
-- Reads `job.metadata.clickupTaskId` — if absent, stage completes as no-op
-- Reads `instanceConfig.clickup.syncEnabled` — if false, stage completes as no-op
-- On success: calls `ClickUpHttpClient.addComment()` with a summary of `job.stageOutputs`, then calls `updateTaskStatus()` with `statusMap.completed`
-- On upstream stage failure detected in job record: posts error summary, calls `updateTaskStatus()` with `statusMap.failed`
-- Stores `{ clickupTaskId, commentId, statusSet }` as its stage output
+### Member directory (`data/clickup-spaces.json.members`)
 
-### ClickUp API Operations Supported (Phase 1 and 2)
-
-| Operation | ClickUp Endpoint |
-|---|---|
-| Create task | `POST /list/{listId}/task` |
-| Update task | `PUT /task/{taskId}` |
-| Update status | `PUT /task/{taskId}` (status field) |
-| Add comment | `POST /task/{taskId}/comment` |
-| Get task | `GET /task/{taskId}` |
-| Get tasks in list | `GET /list/{listId}/task` |
-
----
-
-## 7. Slack Bot ↔ ClickUp
-
-The Slack bot is an external project that communicates with ElevarusOS via `src/core/api.ts` REST endpoints. ElevarusOS acts as the ClickUp proxy — the Slack bot never calls ClickUp directly.
-
-### New API Endpoints for Slack Bot Consumption
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/clickup/tasks` | Create a ClickUp task; optionally queue an agent job |
-| `GET` | `/api/clickup/tasks/:taskId` | Proxy GET task from ClickUp API |
-| `POST` | `/api/clickup/tasks/:taskId/trigger` | Link task to agent, create MC task, queue job |
-| `GET` | `/api/clickup/lists` | Return known list IDs from `data/clickup-spaces.json` |
-
-### `POST /api/clickup/tasks` Request Body
-
-```
-{
-  listId: string,           // ClickUp list ID
-  name: string,             // Task title
-  description?: string,
-  agentInstanceId?: string, // If provided, also creates MC task
-  status?: string           // ClickUp status value
-}
-```
-
-### `POST /api/clickup/tasks/:taskId/trigger` Request Body
-
-```
-{
-  agentInstanceId: string,  // Must match a known instance ID
-  metadata?: Record<string, unknown>  // Extra metadata passed through to MC task
-}
-```
-
-Response for trigger: `{ jobId, mcTaskId, clickupTaskId }` — Slack bot can poll job status via existing `GET /api/jobs/:jobId`.
-
----
-
-## 8. Data Model
-
-### Field Mapping: ClickUp ↔ ElevarusOS
-
-| ClickUp Field | ElevarusOS Field | Notes |
-|---|---|---|
-| `task.id` | `job.metadata.clickupTaskId` | String. Stored on Job at creation time. |
-| `task.list.id` | `instanceConfig.clickup.listId` | Configured per instance in `instance.md`. |
-| `task.space.id` | `instanceConfig.clickup.spaceId` | Configured per instance in `instance.md`. |
-| `task.status.status` | Mapped via `instanceConfig.clickup.statusMap` | String → string mapping per instance. |
-| `task.assignees[].username` | `job.metadata.assignedAgent` | Used to resolve agent instance ID inbound. |
-| `task.custom_fields[]` | `job.metadata.clickupCustomFields` | Raw array stored for workflow use; no schema enforcement at this layer. |
-| `task.name` | `mcTask.title` | MC task title set to ClickUp task name for traceability. |
-
-### Storage Decision
-
-- No Supabase table for ClickUp data.
-- `clickupTaskId` stored in `job.metadata` (existing `metadata?: Record<string, unknown>` on `MCTask`).
-- `job.metadata` is already persisted by the MC task record — no schema migration needed.
-- List IDs and space IDs are static configuration values; store them in:
-  - **Per-instance:** `instanceConfig.clickup.listId`, `instanceConfig.clickup.spaceId` in `instance.md` YAML frontmatter
-  - **Shared/lookup:** `data/clickup-spaces.json` — a lightweight JSON file mapping human-readable names to IDs, checked into the repo, updated manually or via a one-time setup script
-
-### `data/clickup-spaces.json` Shape
+The static catalog is extended to include team members so Claude can resolve names without hitting the ClickUp API on every question:
 
 ```json
 {
-  "teamId": "CLICKUP_TEAM_ID_VALUE",
-  "spaces": [
-    { "id": "space_id", "name": "ElevarusOS" }
-  ],
-  "lists": [
-    { "id": "list_id", "name": "Agent Jobs", "spaceId": "space_id" }
+  "members": [
+    { "id": "12345678", "username": "Shane McIntyre", "email": "shane@elevarus.com", "slackUserId": "U01ABCDEF" },
+    { "id": "87654321", "username": "Pamela",         "email": "pamela@elevarus.com", "slackUserId": "U02GHIJKL" }
   ]
 }
 ```
 
+Hand-maintained or refreshed by `scripts/sync-clickup-catalog.ts` (which now also pulls `GET /team/{teamId}/member`). `slackUserId` is optional and lets the bot map `<@U01ABCDEF>` mentions in the Slack message directly to ClickUp IDs.
+
+### Auth & attribution
+
+- One shared `CLICKUP_API_TOKEN`. Every ClickUp-side action shows up under that token's owner.
+- Every write tool's `execute()` MUST log: `slack.userId`, `slack.channelId`, `slack.traceId`, `clickupTaskId` (or `listId` for create). Use `auditQueryTool` ([src/core/audit-log.ts](../src/core/audit-log.ts)).
+- Tool result on success returns the ClickUp task URL so Claude can cite it in the Slack reply.
+
+### Confirmation policy
+
+Write tools execute immediately when called. We do not interpose a "are you sure?" round-trip — the tool description is the contract, and Claude is the gate.
+
+The system prompt gets a paragraph injected by the manifest's `systemPromptBlurb`:
+
+> "ClickUp is the team's task tracker. For triage questions ('who has overdue tasks', 'what's due today', 'what's on Shane's plate') prefer `clickup_find_tasks` — it spans the whole workspace and supports `dueDate: 'overdue' | 'today' | 'this_week'`. For single-list questions use `clickup_list_tasks`. Always resolve names → ClickUp user IDs via `clickup_list_members` before passing `assignees[]`. ClickUp tools include writes (`clickup_create_task`, `clickup_update_task`, `clickup_add_comment`, `clickup_trigger_agent`). Use them when the user asks you to take an action; otherwise prefer the read tools. If the user is ambiguous about a write (which list, who to assign, what date), confirm in chat before calling the tool."
+
+The manifest's `exampleQuestions[]` carries the use-case list from the top of this section so it shows up in `list_integrations` output and few-shots Claude.
+
+This shifts the "confirm before destructive action" responsibility to Claude, in line with the existing pattern for `broadcast_reply`.
+
+### Failure surfaces
+
+- All tools return `{ ok: false, error: string, hint?: string }` on failure rather than throwing. Claude relays the error verbatim to the user.
+- Rate limits (429): the shared `request()` helper retries with exponential backoff (cap 3 attempts) — same pattern as `RingbaHttpClient`.
+- Unknown list / task / status: tool returns the closest match from the catalog as `hint`.
+
 ---
 
-## 9. New Technical Components
+## 5. Outbound: Workflow → ClickUp
 
-### `src/integrations/clickup/types.ts`
+### `clickup-sync` stage
 
-Interfaces to define (TypeScript, no implementation here — see PRD constraints):
+A new opt-in terminal stage at `src/workflows/stages/clickup-sync.stage.ts`. Behavior:
 
-- `ClickUpTask` — full task shape from the ClickUp v2 API
-- `ClickUpTaskCreate` — request body for `POST /list/{listId}/task`
-- `ClickUpTaskUpdate` — request body for `PUT /task/{taskId}`
-- `ClickUpComment` — request body for `POST /task/{taskId}/comment`
-- `ClickUpWebhookEvent` — inbound webhook payload shape
-- `ClickUpWebhookEventType` — string union of supported event types
-- `ClickUpStatus` — `{ status: string; color: string; type: string }`
-- `ClickUpAssignee` — `{ id: number; username: string; email: string }`
-- `ClickUpCustomField` — `{ id: string; name: string; value: unknown }`
+1. Read `job.metadata.clickupTaskId`. If absent → no-op, return `{ skipped: "no clickupTaskId" }`.
+2. Read `instanceConfig.clickup`. If absent or `syncEnabled: false` → no-op.
+3. On upstream success: `addComment()` with a workflow-defined summary (default: render `summary.markdownReport` or `editorial.editedDraft`, capped at 2k chars). Then `updateTaskStatus(statusMap.completed)`.
+4. On upstream failure (detected via `job.error` set): `addComment()` with the error message. Then `updateTaskStatus(statusMap.failed)`.
+5. Stage output: `{ clickupTaskId, commentId, statusSet }`.
 
-### `src/integrations/clickup/client.ts`
+The stage is self-guarding so workflow definitions can declare it unconditionally. Including it costs nothing for instances without ClickUp configured.
 
-`ClickUpHttpClient` class following the `RingbaHttpClient` pattern exactly:
+### Status mapping
 
-- Constructor reads `CLICKUP_API_TOKEN` and `CLICKUP_TEAM_ID` from env; sets `this.enabled`
-- Auth header: `Authorization: {CLICKUP_API_TOKEN}` (no `Bearer` prefix — ClickUp personal tokens use raw value)
-- Base URL: `https://api.clickup.com/api/v2`
-- Shared private `request()` helper with 429/5xx retry and exponential backoff (same pattern as Ringba)
-- Public methods: `createTask()`, `updateTask()`, `updateTaskStatus()`, `addComment()`, `getTask()`, `getTasksInList()`
-- All methods return `null` (not throw) on failure; errors logged via `logger.warn`
-
-### `src/integrations/clickup/index.ts`
-
-Barrel export: `export { ClickUpHttpClient } from "./client"` and all types from `./types`.
-
-### `src/integrations/clickup/webhook-handler.ts`
-
-- `handleClickUpWebhook(payload: ClickUpWebhookEvent, instanceId?: string): Promise<void>`
-- Resolves agent from task assignee/custom field
-- Creates MC task via `MCClient`
-- Optionally posts confirmation comment via `ClickUpHttpClient`
-- All errors caught and logged — never throws (called from Express handler which must return 200)
-
-### `src/core/api.ts` — New Routes
-
-Three additions (all authenticated with existing API key mechanism if present):
-
-1. `POST /webhooks/clickup` — public-facing, verified by `X-Signature` HMAC only
-2. `POST /api/clickup/tasks` — Slack bot: create task ± queue agent job
-3. `GET /api/clickup/tasks/:taskId` — Slack bot: proxy get task
-4. `POST /api/clickup/tasks/:taskId/trigger` — Slack bot: link task + trigger agent
-5. `GET /api/clickup/lists` — Slack bot: return list catalog from `data/clickup-spaces.json`
-
-### `src/workflows/stages/clickup-sync.stage.ts`
-
-Implements `IStage` from `src/core/stage.interface.ts`:
-
-- `stageName: "clickup-sync"`
-- `run(job: Job): Promise<unknown>`
-- Reads `job.metadata?.clickupTaskId` — no-op if absent
-- Reads `instanceConfig.clickup.syncEnabled` — no-op if false
-- Constructs comment body from prior stage outputs (summary of key metrics or content)
-- Calls `ClickUpHttpClient.addComment()` then `updateTaskStatus()`
-- Returns `{ clickupTaskId, commentPosted, statusUpdated }` as stage output
-
-To include in a workflow, add `"clickup-sync"` to the workflow definition's `stages[]` array in the relevant workflow registry entry. The stage is self-guarding and produces no side effects if not configured.
-
-### `src/core/instance-config.ts` — Extension
-
-Add `InstanceClickUp` interface and optional `clickup?: InstanceClickUp` field on `InstanceConfig`:
-
-```
-interface InstanceClickUp {
-  listId: string;        // ClickUp list ID where tasks are created/watched
-  spaceId: string;       // ClickUp space ID
-  syncEnabled: boolean;  // Whether clickup-sync stage should execute
-  statusMap: {
-    running: string;     // ClickUp status value when job starts
-    completed: string;   // ClickUp status value when job completes
-    failed: string;      // ClickUp status value when job fails
-  };
-  commentOnStart?: boolean;  // Post a comment when job is queued (default: false)
-}
-```
-
-`instance.md` YAML frontmatter example:
+Per-instance because ClickUp lists use workspace-defined custom statuses:
 
 ```yaml
 clickup:
@@ -372,158 +234,218 @@ clickup:
   syncEnabled: true
   commentOnStart: true
   statusMap:
-    running: "In Progress"
+    queued:    "Open"
+    running:   "In Progress"
     completed: "Complete"
-    failed: "Blocked"
+    failed:    "Blocked"
 ```
 
-`loadInstanceConfig()` must be updated to parse and validate the `clickup` block using the same null-guard pattern used for `ringba` and `meta`.
+Status flows outbound only. ElevarusOS job state is the source of truth; ClickUp status is a derived reflection.
 
 ---
 
-## 10. Webhook Security
+## 6. Inbound: ClickUp → ElevarusOS
 
-ClickUp signs all webhook payloads with HMAC-SHA256 using the secret set during webhook registration.
+### Endpoint
 
-### Verification Flow
+`POST /api/webhooks/clickup` registered in [src/api/server.ts](../src/api/server.ts), wired through `express.raw({ type: 'application/json' })` so the raw buffer is available for HMAC.
 
-```
-Incoming POST /webhooks/clickup
-        │
-        ├─ Read raw request body as Buffer (before JSON.parse)
-        │
-        ├─ Read X-Signature header (hex string)
-        │
-        ├─ Compute: HMAC-SHA256(CLICKUP_WEBHOOK_SECRET, rawBody)
-        │
-        ├─ Compare computed hex to X-Signature (timing-safe compare)
-        │   └─ 401 + log warning if mismatch
-        │
-        └─ JSON.parse(rawBody) and proceed
-```
+### Verification
 
-### Implementation Notes
+1. Read `X-Signature` header.
+2. Compute `HMAC-SHA256(CLICKUP_WEBHOOK_SECRET, rawBody)`.
+3. Compare with `crypto.timingSafeEqual()`. Mismatch → 401, log warning, drop.
+4. `JSON.parse(rawBody)`, hand to `webhook-handler.ts`.
 
-- Use Node's built-in `crypto.timingSafeEqual()` for the comparison — never use `===` on signature strings.
-- Express must be configured to preserve the raw body for this route. Use `express.raw({ type: 'application/json' })` on the `/webhooks/clickup` route specifically, not global `express.json()`, to avoid interference with other routes.
-- The raw body buffer must be captured before any middleware parses it.
-- `CLICKUP_WEBHOOK_SECRET` is set during webhook registration in the ClickUp UI/API and must match exactly.
+Mirrors the existing `/api/webhooks/mc` and `/api/webhooks/slack` patterns at [src/api/server.ts:72](../src/api/server.ts:72).
 
----
+### Event handling
 
-## 11. Event Mapping
+Always return `200` after verification — non-200 triggers ClickUp retries. Downstream errors are logged, not surfaced.
 
-| ClickUp Event Type | ElevarusOS Action | Condition |
-|---|---|---|
-| `taskCreated` | Create MC task, assign agent | Task is in a watched list AND has an agent assignee/custom field |
-| `taskStatusUpdated` | Update existing MC task status OR re-queue job | Existing `clickupTaskId` matches a known MC task |
-| `taskAssigned` | Create MC task if not already exists | New assignee maps to a known agent instance ID |
-| `taskCommentPosted` | No action (Phase 1/2) | — |
-| `taskUpdated` | No action unless custom field change (Phase 3+) | — |
-| `customFieldUpdated` | Conditional re-queue (Phase 3+) | Depends on which custom field and configured trigger values |
-
-### Event Routing Logic
-
-The webhook handler checks events in this order:
-
-1. Is the event type in the supported set? If not, log and return.
-2. Is the task in a list mapped to a known instance? Check `data/clickup-spaces.json` and all instance configs.
-3. Does the task have a resolvable agent (assignee username = instance ID, or `ElevarusAgent` custom field)?
-4. Is there already an active MC task for this `clickupTaskId`? If yes, update rather than create.
-
----
-
-## 12. Status Mapping
-
-ClickUp task statuses are workspace-configured strings. The mapping is per-instance in `instanceConfig.clickup.statusMap`.
-
-### Default Suggested Mapping
-
-| ElevarusOS Job Status | ClickUp Task Status (suggested default) |
+| Event | Action |
 |---|---|
-| `queued` | `Open` |
-| `running` | `In Progress` |
-| `awaiting_approval` | `Review` |
-| `completed` | `Complete` |
-| `failed` | `Blocked` |
+| `taskCreated` | If task is in a watched list AND resolves to an agent (see below) → `MCClient.createTask({ instanceId, title, metadata: { clickupTaskId, clickupListId } })`. No auto-comment on the ClickUp task. |
+| `taskAssigned` | Same as `taskCreated` if no MC task exists yet for that `clickupTaskId`. |
+| `taskStatusUpdated` | If a known MC task exists, update its status per the reverse mapping. Phase 4 only — Phase 3 ignores. |
+| `taskCommentPosted` | Ignore in v1. |
+| Anything else | Log + drop. |
 
-The actual string values must match the ClickUp workspace's custom statuses exactly (case-sensitive). Each instance configures its own map since different ClickUp lists may use different status names.
+### Agent resolution
 
-Status updates flow outbound only (ElevarusOS → ClickUp). ElevarusOS job status is the source of truth; ClickUp status is a derived reflection.
+Resolution walks contextual cues in order. **No required custom field.** First match wins; ties (multiple instances watching the same list) fall to the next signal.
+
+1. **List membership.** For each instance in `listInstanceIds()`, check `instanceConfig.clickup.listId === task.list.id`. If exactly one instance matches, that's the agent.
+2. **Tags.** If list resolution returned 0 or >1 candidates, intersect the task's `tags[].name` with the candidate set's instance IDs. If exactly one tag matches an instance ID, that's the agent.
+3. **Assignees.** Fallback: match `task.assignees[].username` (case-insensitive, whitespace-collapsed) against the candidate set's instance IDs or display names.
+4. **Drop.** If none resolve, log `{ eventId, taskId, listId, candidates, signals }` and return 200.
+
+Each step logs which signal won so we can tune the heuristics from real traffic.
 
 ---
 
-## 13. Environment Variables
+## 7. Data Model
+
+### Field mapping
+
+| ClickUp field | ElevarusOS field | Notes |
+|---|---|---|
+| `task.id` | `job.metadata.clickupTaskId` | String. Set at MC task create time. |
+| `task.list.id` | `instanceConfig.clickup.listId` | Per-instance config. |
+| `task.space.id` | `instanceConfig.clickup.spaceId` | Per-instance config. |
+| `task.status.status` | `instanceConfig.clickup.statusMap[*]` | Per-instance string→string. |
+| `task.assignees[].username` | `job.metadata.assignedAgent` | Used for inbound resolution. |
+| `task.custom_fields[]` | `job.metadata.clickupCustomFields` | Stored verbatim. |
+| `task.name` | `mcTask.title` | For traceability. |
+
+### Storage decision
+
+- **No Supabase tables.** `clickupTaskId` lives on `job.metadata` (existing field on the Job record).
+- **`data/clickup-spaces.json`** holds team / space / list catalog. Hand-maintained, checked in. Read by `clickup_list_lists` and the inbound webhook handler.
+
+```json
+{
+  "teamId": "9012345",
+  "spaces": [
+    { "id": "90120000001", "name": "Elevarus" }
+  ],
+  "lists": [
+    { "id": "901200012345", "name": "Agent Jobs",  "spaceId": "90120000001" },
+    { "id": "901200067890", "name": "Marketing",   "spaceId": "90120000001" }
+  ],
+  "members": [
+    { "id": "12345678", "username": "Shane McIntyre", "email": "shane@elevarus.com", "slackUserId": "U01ABCDEF" }
+  ]
+}
+```
+
+A one-shot setup script (`scripts/sync-clickup-catalog.ts`) refreshes this file from the ClickUp API (`GET /team`, `GET /team/{teamId}/space`, `GET /space/{spaceId}/list`, `GET /team/{teamId}/member`). Not a daemon. `slackUserId` is hand-maintained — the script preserves existing values on overwrite.
+
+---
+
+## 8. Configuration
+
+### Env vars
 
 | Variable | Required | Description |
 |---|---|---|
-| `CLICKUP_API_TOKEN` | Yes | Personal API token from ClickUp → Settings → Apps. Used for all outbound REST calls. |
-| `CLICKUP_WEBHOOK_SECRET` | Yes (Phase 2) | Secret string set during ClickUp webhook registration. Used for HMAC-SHA256 verification. |
-| `CLICKUP_TEAM_ID` | Yes | ClickUp workspace team ID. Found in workspace settings or API response. Required for team-scoped API calls. |
+| `CLICKUP_API_TOKEN` | Yes | Personal API token. ClickUp → Settings → Apps. Format `pk_<digits>_<alphanum>`. |
+| `CLICKUP_TEAM_ID` | Yes | Workspace team ID. Required for team-scoped endpoints. |
+| `CLICKUP_WEBHOOK_SECRET` | Phase 4 | Secret set during webhook registration. |
+| `CLICKUP_DEFAULT_LIST_ID` | Optional | Fallback list ID when Slack tool calls don't specify one. Replaces v1's `CLICKUP_LIST_ID`. |
 
-These follow the same `process.env.X ?? ""` pattern used in all other ElevarusOS clients. The `ClickUpHttpClient` constructor sets `this.enabled = Boolean(CLICKUP_API_TOKEN && CLICKUP_TEAM_ID)` and no-ops all methods when disabled.
+`ClickUpHttpClient` constructor sets `this.enabled = Boolean(CLICKUP_API_TOKEN && CLICKUP_TEAM_ID)`. All methods no-op (return `null`) when disabled. Manifest `status()` returns `"unconfigured"` so `list_integrations` reflects reality.
 
-Add all three to `docs/environment.md` and `.env.example`.
+The existing `config.clickup` block ([src/config/index.ts:24](../src/config/index.ts:24)) gets `teamId`, `webhookSecret`, and `defaultListId` added; `apiToken` and `listId` (renamed `defaultListId`) stay backward-compatible for the legacy intake adapter until Phase 5.
 
----
+### Per-instance config
 
-## 14. Phased Rollout
+Add `InstanceClickUp` to [src/core/instance-config.ts](../src/core/instance-config.ts):
 
-### Phase 1: Outbound Only (No Webhook Needed)
+```ts
+interface InstanceClickUp {
+  listId:        string;
+  spaceId:       string;
+  syncEnabled:   boolean;  // gates the clickup-sync stage
+  statusMap: {
+    queued?:    string;
+    running:    string;
+    completed:  string;
+    failed:     string;
+  };
+}
+```
 
-**Goal:** Any workflow can create or update a ClickUp task on completion.
+No `commentOnStart` — workflows that want a start comment can declare `clickup_add_comment` as an explicit early stage. Default behavior is silent until the workflow finishes.
 
-Deliverables:
-- `src/integrations/clickup/client.ts` with `createTask()`, `updateTask()`, `addComment()`, `getTask()`
-- `src/integrations/clickup/types.ts`
-- `src/integrations/clickup/index.ts`
-- `src/workflows/stages/clickup-sync.stage.ts`
-- `InstanceClickUp` config block in `src/core/instance-config.ts`
-- `data/clickup-spaces.json` with team/space/list IDs
-- Add `clickup` block to `src/instances/final-expense-reporting/instance.md` as the pilot instance
-
-Validation: Run `final-expense-reporting` workflow manually; confirm ClickUp task created/commented in the target list.
-
-### Phase 2: Inbound Webhook
-
-**Goal:** ClickUp task creation triggers agent workflow automatically.
-
-Deliverables:
-- `POST /webhooks/clickup` route in `src/core/api.ts`
-- `src/integrations/clickup/webhook-handler.ts`
-- HMAC-SHA256 verification middleware
-- ClickUp webhook registration (point to ElevarusOS public URL + set secret)
-- Agent resolution logic (assignee username → instance ID lookup)
-- `commentOnStart` support in `clickup-sync` stage
-
-Validation: Create a ClickUp task assigned to `final-expense-reporting`; confirm MC task created and job queued within 30 seconds; confirm ClickUp task receives a start comment.
-
-### Phase 3: Slack Bot ClickUp Commands
-
-**Goal:** Slack bot users can create tasks, query status, and trigger agent workflows via ElevarusOS.
-
-Deliverables:
-- `POST /api/clickup/tasks` endpoint
-- `GET /api/clickup/tasks/:taskId` endpoint
-- `POST /api/clickup/tasks/:taskId/trigger` endpoint
-- `GET /api/clickup/lists` endpoint
-- Slack bot command handlers (in the Slack bot project, consuming these endpoints)
-
-Validation: Slack command creates a ClickUp task; task appears in ClickUp; Slack bot reports task ID back to user.
+Loaded with the same null-guard pattern as `ringba` and `meta`.
 
 ---
 
-## 15. Open Questions
+## 9. Code Layout
 
-| # | Question | Owner | Notes |
+### New files (Phase 1)
+
+```
+src/integrations/clickup/
+  client.ts          ClickUpHttpClient — auth, retries, raw REST
+  types.ts           ClickUpTask, ClickUpComment, ClickUpWebhookEvent, ...
+  index.ts           barrel export (mirrors ringba/index.ts)
+  manifest.ts        IntegrationManifest — registers liveTools[]
+  live-tools.ts      QATool[] — read tools first, write tools after Phase 1 review
+```
+
+### New files (Phase 3)
+
+```
+src/workflows/stages/clickup-sync.stage.ts
+```
+
+### New files (Phase 4)
+
+```
+src/integrations/clickup/webhook-handler.ts
+```
+
+### Touched files
+
+- `src/core/integration-registry.ts` — one import + push to `INTEGRATION_MANIFESTS`.
+- `src/core/instance-config.ts` — add `InstanceClickUp` + parser.
+- `src/config/index.ts` — extend `clickup` block.
+- `src/api/server.ts` — `express.raw()` mount + `POST /api/webhooks/clickup` route (Phase 4).
+- `docs/environment.md`, `docs/integrations.md` — document env vars + ClickUp section.
+- `docs/qa-bot.md` — note that write tools are now in-scope for ClickUp specifically (see revisions in this PR).
+
+### Audit log entries
+
+Every write tool emits one row via the audit logger with shape `{ tool, slackUserId, slackChannelId, traceId, clickupTaskId|listId, payloadHash, ok, ms }`. Backed by the same Supabase table the audit tool already writes to.
+
+---
+
+## 10. Legacy Adapter Migration (Phase 5)
+
+[src/adapters/intake/clickup.adapter.ts](../src/adapters/intake/clickup.adapter.ts) is a polling intake that:
+- pulls `Open`-status tasks from `config.clickup.listId`,
+- normalizes them to `BlogRequest`,
+- dedups via `data/clickup-processed.json`,
+- is wired into `--once` mode and the Scheduler's no-MC fallback path ([src/index.ts:64](../src/index.ts:64), [src/index.ts:215](../src/index.ts:215)).
+
+Migration plan (Phase 5 only — no churn during 1–4):
+1. Move ClickUp HTTP into `ClickUpHttpClient.listTasks(listId, { status: ["Open"] })`. Adapter becomes a thin shim around the client + the existing normalization logic.
+2. Replace the dedup file with a check against `job_store` for `metadata.clickupTaskId` already-seen.
+3. Keep the adapter file but reduce it to the normalization + dedup logic; HTTP and types come from `src/integrations/clickup/`.
+4. After daemon mode is the only mode in production, delete the adapter and the Scheduler fallback path entirely.
+
+This phase is a chore, not a feature. It is not blocked by the inbound webhook (Phase 4) and can be done out of order.
+
+---
+
+## 11. Phased Rollout
+
+| Phase | Deliverable | Effort | Gates |
 |---|---|---|---|
-| OQ-01 | Which ClickUp lists map to which agent instances? | Shane | Need list IDs for each active instance before Phase 2 config. |
-| OQ-02 | What is the agent resolution strategy? Assignee username = instance ID, or a custom field? | Shane | Custom field (`ElevarusAgent`) is more explicit but requires ClickUp workspace config. |
-| OQ-03 | What is the custom field schema for agent assignment? | Shane | If using a custom field, decide field name, type (text/dropdown), and allowed values. |
-| OQ-04 | What is the MC task template for ClickUp-triggered jobs? Should it include a `workflowType` override? | Engineering | Current `MCTaskCreate` has no `workflowType` — the MC worker infers it from `assigned_to`. Confirm this is sufficient. |
-| OQ-05 | Does the Slack bot need ClickUp OAuth per user, or does it use the shared `CLICKUP_API_TOKEN`? | Shane | Personal token is simpler but all writes attributed to one user. |
-| OQ-06 | Should `clickup-sync` post a comment containing full stage output, or a formatted summary? | Shane | Full output may be verbose for large reports. A summary template per workflow type is preferred. |
-| OQ-07 | Which ClickUp status string values does each watched list use? | Shane | Must match exactly — collect before writing `statusMap` configs. |
-| OQ-08 | Is `commentOnStart` needed for all instances, or only for human-initiated tasks? | Shane | Adds chattiness for scheduled jobs that auto-create ClickUp tasks. |
-| OQ-09 | What is the public URL / hostname for the ElevarusOS Express server to register with ClickUp webhooks? | Engineering | Required for Phase 2. Must be stable (not localhost). |
-| OQ-10 | Should ClickUp-triggered jobs bypass the MC worker poll cycle (direct orchestrator dispatch), or go through the full MC → poll → dispatch path? | Engineering | Full MC path adds latency but maintains audit trail. Direct dispatch is faster but skips MC task creation. Recommendation: full MC path. |
+| **1. Slack read tools (the headline)** | `client.ts`, `types.ts`, `manifest.ts`, `live-tools.ts` (read-only: `list_lists`, `list_members`, `list_tasks`, `find_tasks`, `get_task`, `get_task_comments`), `data/clickup-spaces.json` (full catalog incl. `members[]`), `scripts/sync-clickup-catalog.ts`, `index.ts`. Manifest registered. | 2 days | `list_integrations` shows `clickup: configured`. Demos: (a) "@Elevarus who has overdue tasks?" returns assignee → task list grouped, (b) "what's due today on Shane's plate?", (c) "what's the status of the Q3 deck task?", (d) "what's open in Marketing?". |
+| **2. Slack write tools (small surface)** | Add `clickup_update_task`, `clickup_add_comment`, `clickup_trigger_agent`, then `clickup_create_task` last. Audit logging on every write. System-prompt blurb updated. Slack bot PRD revised. | 1 day | Demos: (a) "move <task> to Review", (b) "comment on <task> that the data is stale", (c) "have the U65 bot pick up <task>", (d) (low-priority) "create a task for Shane to update the Q3 deck due Friday". |
+| **3. Outbound workflow stage** | `clickup-sync.stage.ts`. `InstanceClickUp` config added. Pilot on `final-expense-reporting` instance. | 1 day | Pilot reporting workflow posts a completion comment + status update on its source ClickUp task. |
+| **4. Inbound webhook** | `POST /api/webhooks/clickup`, HMAC verify, `webhook-handler.ts`, contextual agent resolution (list → tags → assignees). Webhook registered against `https://commotion-ecology-lion.ngrok-free.dev/api/webhooks/clickup`. | 1.5 days | Creating a ClickUp task in a watched list queues an MC task within 30s with `metadata.clickupTaskId` set. No auto-comment on the ClickUp task. |
+| **5. Legacy adapter migration** | Refactor `src/adapters/intake/clickup.adapter.ts` to thin shim over the new client; later, delete. | 1 day | Old `--once` blog flow still works; dedup checks `job_store` instead of the JSON file. |
+
+Total: ~6 working days through Phase 4. Production rollover step (separate from this PRD): re-register webhook with the production URL and update `ELEVARUS_PUBLIC_URL` in env.
+
+---
+
+## 12. Open Questions
+
+All resolved with defaults — no outstanding questions block Phase 1.
+
+- **OQ-01** — Sync the full catalog. No manual trim.
+- **OQ-02** — Inbound agent resolution: list → tags → assignees. No required custom field.
+- **OQ-03** — No `commentOnStart` anywhere. Dropped from config.
+- **OQ-04** — `clickup_create_task` accepts free-form custom fields (`Record<string, unknown>`); ClickUp rejects what's wrong server-side.
+- **OQ-05** — Public URL is `https://commotion-ecology-lion.ngrok-free.dev` (ngrok). Will change at production rollover; track as launch-checklist item.
+- **OQ-06** — `clickup-sync` comment body: `summary.oneLiner` + first 1.5k chars of `summary.markdownReport`, with a link back to the MC task for the full output.
+- **OQ-07** — `clickup_trigger_agent` deduplicates against existing MC tasks for the same `clickupTaskId` and returns the existing `jobId`.
+- **OQ-08** — Per-user OAuth deferred until attribution becomes a real complaint.
+- **OQ-09** — Member directory hand-curated in `data/clickup-spaces.json.members[]`; revisit if team grows past ~15.
+- **OQ-10** — `clickup_find_tasks` defaults to `includeClosed: false`.
+- **OQ-11** — Claude resolves natural-language dates ("Friday", "next Tuesday") to ISO using the PT date in its system prompt before calling `clickup_create_task` / `clickup_update_task`. No local date-NLP library.
