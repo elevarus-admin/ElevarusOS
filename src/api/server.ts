@@ -161,6 +161,16 @@ export class ApiServer {
     const secret = process.env.API_SECRET;
     if (!secret) { next(); return; }
 
+    // Read methods are allowed without x-api-key. The dashboard's browser-side
+    // code fetches these directly (e.g. GET /api/jobs) and can't carry a
+    // secret. CORS (CORS_ORIGINS) already restricts which browser origins
+    // can call the API, and reads expose only non-sensitive aggregate data.
+    // Writes (POST/PUT/PATCH/DELETE) still require the shared secret.
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+      next();
+      return;
+    }
+
     const key = req.headers["x-api-key"];
     if (key !== secret) {
       // One-line diagnostic so future routing surprises are obvious in logs.
