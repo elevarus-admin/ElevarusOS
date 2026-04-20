@@ -155,7 +155,13 @@ export class ApiServer {
       p === "/api/health"          || p === "/health"          ||
       p === "/api/openapi.json"    || p === "/openapi.json"    ||
       p === "/api-reference"       ||
-      p.startsWith("/api/webhooks/slack") || p.startsWith("/webhooks/slack")
+      p.startsWith("/api/webhooks/slack")  || p.startsWith("/webhooks/slack")  ||
+      // Agent Builder: sessions are UUID-scoped; the session ID itself is
+      // the auth token (random v4 UUID, unguessable). The dashboard wizard's
+      // browser-side fetch can't carry x-api-key and proxying through
+      // Next.js routes doesn't work in prod (DO routes /api/* to the api
+      // service, not to dashboard-side route handlers).
+      p.startsWith("/api/agent-builder")   || p.startsWith("/agent-builder")
     ) { next(); return; }
 
     const secret = process.env.API_SECRET;
