@@ -268,6 +268,39 @@ export async function abandonSession(sessionId: string): Promise<void> {
   await supabase.from(TABLE).update({ status: "abandoned" }).eq("id", sessionId);
 }
 
+/**
+ * Mark every open session that hasn't been touched in `daysIdle` days as
+ * abandoned. Returns the count of sessions affected. Called by the digest
+ * worker before rendering, so the digest reflects fresh state.
+ *
+ * Per PRD OQ-01: 7-day inactivity threshold, no notification to the user.
+ */
+export async function markIdleSessionsAbandoned(daysIdle = 7): Promise<number> {
+  const supabase = getSupabaseClient();
+  const cutoff = new Date(Date.now() - daysIdle * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update({ status: "abandoned" })
+    .eq("status", "open")
+    .lt("updated_at", cutoff)
+    .select("id");
+
+  if (error) {
+    logger.warn("agent-builder: idle sweep failed", { error: error.message });
+    return 0;
+  }
+  const count = data?.length ?? 0;
+  if (count > 0) {
+    logger.info("agent-builder: marked idle sessions abandoned", {
+      count,
+      cutoff,
+      daysIdle,
+    });
+  }
+  return count;
+}
+
 // ─── Mark submitted (called by clickup ticket creator) ──────────────────────
 
 export async function markSubmitted(

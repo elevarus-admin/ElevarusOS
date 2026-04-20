@@ -38,7 +38,8 @@ export const manifest: IntegrationManifest = {
     "Adaptive follow-ups when answers are ambiguous",
     "Session resume in the same Slack thread",
     "Auto-creates a ClickUp ticket with a 10-section PRD",
-    "Slack + Dashboard (Phase 3) surfaces share the same backend",
+    "Slack + Dashboard surfaces share the same backend",
+    "Weekly Slack digest (Fridays @ 09:00 PT) + 7-day idle sweeper",
   ],
 
   systemPromptBlurb: SYSTEM_PROMPT_BLURB,

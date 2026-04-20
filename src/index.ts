@@ -56,6 +56,7 @@ import { ApiServer }       from "./api/server";
 import { LeadsProsperSyncWorker } from "./integrations/leadsprosper";
 import { RingbaSyncWorker }       from "./integrations/ringba";
 import { GoogleAdsSyncWorker }    from "./integrations/google-ads";
+import { AgentBuilderDigestWorker } from "./core/agent-builder";
 
 // Intake adapters
 import { ClickUpIntakeAdapter } from "./adapters/intake/clickup.adapter";
@@ -176,12 +177,14 @@ async function main(): Promise<void> {
   // Keep Supabase in sync with external platforms. Each worker runs on its own
   // cron, no-ops if its API key / Supabase credentials are missing.
 
-  const lpSync        = new LeadsProsperSyncWorker();
-  const ringbaSync    = new RingbaSyncWorker();
-  const googleAdsSync = new GoogleAdsSyncWorker();
+  const lpSync             = new LeadsProsperSyncWorker();
+  const ringbaSync         = new RingbaSyncWorker();
+  const googleAdsSync      = new GoogleAdsSyncWorker();
+  const agentBuilderDigest = new AgentBuilderDigestWorker();
   lpSync.start();
   ringbaSync.start();
   googleAdsSync.start();
+  agentBuilderDigest.start();
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
 
@@ -191,6 +194,7 @@ async function main(): Promise<void> {
     lpSync.stop();
     ringbaSync.stop();
     googleAdsSync.stop();
+    agentBuilderDigest.stop();
     process.exit(0);
   };
 

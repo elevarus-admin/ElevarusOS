@@ -22,7 +22,8 @@
     "backfill:lp":     "ts-node scripts/backfill-leadsprosper.ts",
     "backfill:ringba": "ts-node scripts/backfill-ringba.ts",
     "sync:clickup-catalog": "ts-node scripts/sync-clickup-catalog.ts",
-    "sync:google-ads":      "ts-node src/integrations/google-ads/sync-worker.ts"
+    "sync:google-ads":      "ts-node src/integrations/google-ads/sync-worker.ts",
+    "agent-builder:digest": "ts-node src/core/agent-builder/digest-worker.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

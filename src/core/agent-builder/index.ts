@@ -17,9 +17,12 @@ export {
   addAdaptiveFollowup,
   abandonSession,
   markSubmitted,
+  markIdleSessionsAbandoned,
 } from "./session";
 
-export { renderPRD } from "./prd-renderer";
+export { renderPRD }                          from "./prd-renderer";
+export { buildDigestData, renderDigest }      from "./digest";
+export { AgentBuilderDigestWorker }           from "./digest-worker";
 
 export {
   CANONICAL_QUESTIONS,
