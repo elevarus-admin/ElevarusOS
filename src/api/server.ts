@@ -139,8 +139,19 @@ export class ApiServer {
   // ─── Auth middleware ────────────────────────────────────────────────────────
 
   private authMiddleware(req: Request, res: Response, next: NextFunction): void {
-    // Webhook endpoints authenticate via Slack HMAC — skip API key check
-    if (req.path.startsWith("/api/webhooks/slack")) { next(); return; }
+    // Public endpoints — no API key required:
+    //   /api/health           — DigitalOcean (and any uptime monitor) hits this
+    //                           without headers; must return 200 for the deploy
+    //                           to be considered healthy
+    //   /api/webhooks/slack/* — authenticate via Slack HMAC signature
+    //   /api/openapi.json     — public spec, safe to expose
+    //   /api-reference        — public Scalar HTML viewer
+    if (
+      req.path === "/api/health"            ||
+      req.path === "/api/openapi.json"      ||
+      req.path === "/api-reference"         ||
+      req.path.startsWith("/api/webhooks/slack")
+    ) { next(); return; }
 
     const secret = process.env.API_SECRET;
     if (!secret) { next(); return; }
