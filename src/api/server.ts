@@ -54,6 +54,7 @@ import {
 } from "../adapters/slack/events";
 import { config } from "../config";
 import { INTEGRATION_MANIFESTS } from "../core/integration-registry";
+import { buildAgentBuilderRouter } from "./agent-builder.routes";
 
 const AGENTS_DIR = path.resolve(__dirname, "../agents");
 
@@ -190,6 +191,11 @@ export class ApiServer {
 
     // ── Integrations ──────────────────────────────────────────────────────────
     r.get("/api/integrations", this.handleAsync(this.getIntegrations.bind(this)));
+
+    // ── Agent Builder ─────────────────────────────────────────────────────────
+    // Multi-step wizard that produces a ClickUp PRD for a new agent.
+    // Slack uses the tool-based surface (see src/core/agent-builder/slack-tools.ts).
+    r.use("/api/agent-builder", buildAgentBuilderRouter());
 
     // ── OpenAPI spec ──────────────────────────────────────────────────────────
     r.get("/api/openapi.json", (_req, res) => {

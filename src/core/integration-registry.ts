@@ -81,6 +81,7 @@ import { manifest as googleAdsManifest }     from "../integrations/google-ads/ma
 import { manifest as clickupManifest }       from "../integrations/clickup/manifest";
 import { manifest as everflowManifest }      from "../integrations/everflow/manifest";
 import { manifest as thumbtackManifest }     from "../integrations/thumbtack/manifest";
+import { manifest as agentBuilderManifest }  from "./agent-builder/manifest";
 
 export const INTEGRATION_MANIFESTS: IntegrationManifest[] = [
   ringbaManifest,
@@ -90,6 +91,7 @@ export const INTEGRATION_MANIFESTS: IntegrationManifest[] = [
   clickupManifest,
   everflowManifest,
   thumbtackManifest,
+  agentBuilderManifest,
 ];
 
 // ─── Aggregations ─────────────────────────────────────────────────────────────
