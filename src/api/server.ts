@@ -139,18 +139,23 @@ export class ApiServer {
   // ─── Auth middleware ────────────────────────────────────────────────────────
 
   private authMiddleware(req: Request, res: Response, next: NextFunction): void {
-    // Public endpoints — no API key required:
-    //   /api/health           — DigitalOcean (and any uptime monitor) hits this
-    //                           without headers; must return 200 for the deploy
-    //                           to be considered healthy
-    //   /api/webhooks/slack/* — authenticate via Slack HMAC signature
-    //   /api/openapi.json     — public spec, safe to expose
-    //   /api-reference        — public Scalar HTML viewer
+    // Public endpoints — no API key required.
+    //
+    // Both /api/foo and bare /foo forms are accepted because DigitalOcean
+    // App Platform routing can strip the matched path prefix before
+    // forwarding to the service (depends on preserve_path_prefix setting).
+    // We accept both shapes to be robust.
+    //
+    //   health           — DO probe + uptime monitors
+    //   webhooks/slack/* — Slack HMAC verified inside handler
+    //   openapi.json     — public spec
+    //   api-reference    — public Scalar HTML viewer
+    const p = req.path;
     if (
-      req.path === "/api/health"            ||
-      req.path === "/api/openapi.json"      ||
-      req.path === "/api-reference"         ||
-      req.path.startsWith("/api/webhooks/slack")
+      p === "/api/health"          || p === "/health"          ||
+      p === "/api/openapi.json"    || p === "/openapi.json"    ||
+      p === "/api-reference"       ||
+      p.startsWith("/api/webhooks/slack") || p.startsWith("/webhooks/slack")
     ) { next(); return; }
 
     const secret = process.env.API_SECRET;
@@ -158,6 +163,8 @@ export class ApiServer {
 
     const key = req.headers["x-api-key"];
     if (key !== secret) {
+      // One-line diagnostic so future routing surprises are obvious in logs.
+      logger.warn("api: 401 — path not in allowlist + no x-api-key", { path: p, method: req.method });
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
