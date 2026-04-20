@@ -158,6 +158,9 @@ export class ApiServer {
     // ── Analytics ─────────────────────────────────────────────────────────────
     r.get("/api/analytics/tokens", this.handleAsync(this.getTokenAnalytics.bind(this)));
 
+    // ── Workflows ─────────────────────────────────────────────────────────────
+    r.get("/api/workflows", this.handleAsync(this.listWorkflows.bind(this)));
+
     // ── Integrations ──────────────────────────────────────────────────────────
     r.get("/api/integrations", this.handleAsync(this.getIntegrations.bind(this)));
 
@@ -168,10 +171,12 @@ export class ApiServer {
     });
 
     // ── Scalar API Reference (standalone HTML — no Next.js CSS pollution) ─────
-    // Rendered in an iframe from the dashboard so Tailwind never touches it.
+    // Rendered in an iframe from the dashboard (port 3000 → port 3001).
+    // Do NOT set X-Frame-Options: SAMEORIGIN — that blocks cross-port iframes.
     r.get("/api-reference", (_req, res) => {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      // Allow embedding from the dashboard (any localhost origin in dev)
+      res.setHeader("Content-Security-Policy", "frame-ancestors 'self' http://localhost:* http://127.0.0.1:*");
       res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -602,6 +607,19 @@ export class ApiServer {
   }
 
   // ─── Instance handlers ────────────────────────────────────────────────────────
+
+  /** Shared helper — returns parsed configs for all agent instances. */
+  private loadAllInstances(): Array<{ id: string; name: string; baseWorkflow: string; enabled: boolean }> {
+    const instanceIds = listInstanceIds(true);
+    return instanceIds.flatMap((id) => {
+      try {
+        const cfg = loadInstanceConfig(id);
+        return [{ id: cfg.id, name: cfg.name, baseWorkflow: cfg.baseWorkflow, enabled: cfg.enabled }];
+      } catch {
+        return [];
+      }
+    });
+  }
 
   private async listInstances(_req: Request, res: Response): Promise<void> {
     const instanceIds = listInstanceIds(true);
@@ -1107,6 +1125,65 @@ export class ApiServer {
       .sort((a, b) => b.totalTokens - a.totalTokens);
 
     res.json({ days, totals, byDay, byWorkflow });
+  }
+
+  // ─── Integrations ─────────────────────────────────────────────────────────────
+
+  // ─── Workflows ────────────────────────────────────────────────────────────────
+
+  private async listWorkflows(_req: Request, res: Response): Promise<void> {
+    const registry = this.options.registry;
+    const allInstances = await this.loadAllInstances();
+
+    // Scan filesystem for prompt files per workflow directory
+    const workflowsRoot = path.resolve(process.cwd(), "src/workflows");
+    const promptsByType = new Map<string, string[]>();
+    try {
+      const dirs = fs.readdirSync(workflowsRoot, { withFileTypes: true });
+      for (const d of dirs) {
+        if (!d.isDirectory() || d.name.startsWith("_")) continue;
+        const promptsDir = path.join(workflowsRoot, d.name, "prompts");
+        try {
+          const files = fs.readdirSync(promptsDir)
+            .filter(f => f.endsWith(".md"))
+            .sort();
+          promptsByType.set(d.name, files);
+        } catch {
+          promptsByType.set(d.name, []);
+        }
+      }
+    } catch {
+      // Workflows directory not found — proceed with registry only
+    }
+
+    // Build full list: union of registered types + directory entries
+    const allTypes = new Set([
+      ...registry.registeredTypes,
+      ...promptsByType.keys(),
+    ]);
+
+    const workflows = Array.from(allTypes).sort().map(type => {
+      const def = registry.get(type);
+      const stages = def ? def.stages.map(s => s.stageName) : [];
+      const prompts = promptsByType.get(type) ?? [];
+
+      // Find agents whose baseWorkflow matches this workflow type,
+      // OR whose id matches (agents are often named after their workflow dir)
+      const linkedAgents = allInstances
+        .filter(inst => inst.baseWorkflow === type || inst.id === type)
+        .map(inst => ({ id: inst.id, name: inst.name, enabled: inst.enabled }));
+
+      return {
+        type,
+        registered: !!def,
+        stages,
+        prompts,
+        linkedAgents,
+        promptPath: `src/workflows/${type}/prompts`,
+      };
+    });
+
+    res.json({ workflows });
   }
 
   // ─── Integrations ─────────────────────────────────────────────────────────────
