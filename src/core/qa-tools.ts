@@ -50,6 +50,13 @@ export interface QAToolContext {
     userId?:    string;
     channelId?: string;
     traceId?:   string;
+    /**
+     * Slack thread timestamp. Always populated for app_mention / IM events
+     * (events.ts uses `event.thread_ts ?? event.ts`). Used by stateful tools
+     * like Agent Builder to scope sessions to a specific Slack thread so
+     * conversation state survives across @-mentions in the same thread.
+     */
+    threadTs?:  string;
   };
 }
 

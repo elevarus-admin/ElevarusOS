@@ -350,7 +350,7 @@ async function respond(args: {
       toolContext:   {
         jobStore: deps.jobStore,
         registry: deps.registry,
-        slack:    { userId: askerUserId, channelId: channel, traceId },
+        slack:    { userId: askerUserId, channelId: channel, traceId, threadTs },
       },
       maxIterations: maxToolIterations(),
     });

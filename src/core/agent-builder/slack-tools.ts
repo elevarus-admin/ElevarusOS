@@ -54,10 +54,7 @@ export const proposeAgentTool: QATool = {
         source:          "slack",
         createdBy:       ctx.slack?.userId,
         slackChannelId:  ctx.slack?.channelId,
-        // Thread context is not always populated on ctx.slack — we fall back
-        // to no thread_ts which means "user DM or channel top-level mention".
-        // The session resumes on (user, channel, null_thread) which is fine.
-        slackThreadTs:   undefined,
+        slackThreadTs:   ctx.slack?.threadTs,
       });
 
       const currentIndex =

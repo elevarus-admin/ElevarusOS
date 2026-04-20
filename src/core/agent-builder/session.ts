@@ -41,20 +41,32 @@ const TABLE = "agent_builder_sessions";
 export async function startOrResumeSession(opts: StartSessionOpts): Promise<AgentBuilderSession> {
   const supabase = getSupabaseClient();
 
-  // Resume path — Slack only
-  if (opts.source === "slack" && opts.createdBy && opts.slackChannelId && opts.slackThreadTs) {
-    const { data: existing, error: selErr } = await supabase
+  // Resume path — Slack only.
+  // Tries (user, channel, thread) when threadTs is present, otherwise
+  // (user, channel, NULL thread). Without this, every @-mention starts
+  // a fresh session and the user's prior progress is orphaned.
+  if (opts.source === "slack" && opts.createdBy && opts.slackChannelId) {
+    let q = supabase
       .from(TABLE)
       .select("*")
       .eq("source",           "slack")
       .eq("status",           "open")
       .eq("created_by",       opts.createdBy)
-      .eq("slack_channel_id", opts.slackChannelId)
-      .eq("slack_thread_ts",  opts.slackThreadTs)
-      .maybeSingle();
+      .eq("slack_channel_id", opts.slackChannelId);
 
+    // Critical: PostgREST `.eq(col, undefined)` produces invalid syntax and
+    // matches nothing. Use `.is(col, null)` for the null-thread case.
+    q = opts.slackThreadTs
+      ? q.eq("slack_thread_ts", opts.slackThreadTs)
+      : q.is("slack_thread_ts", null);
+
+    const { data: existing, error: selErr } = await q.maybeSingle();
     if (selErr) logger.warn("agent-builder: resume lookup failed", { error: selErr.message });
     if (existing) {
+      logger.info("agent-builder: resuming open session", {
+        sessionId:     existing.id,
+        currentIndex:  existing.current_question_index,
+      });
       return rowToSession(existing);
     }
   }
