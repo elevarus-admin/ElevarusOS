@@ -161,6 +161,12 @@ export class ApiServer {
     // ── Integrations ──────────────────────────────────────────────────────────
     r.get("/api/integrations", this.handleAsync(this.getIntegrations.bind(this)));
 
+    // ── OpenAPI spec ──────────────────────────────────────────────────────────
+    r.get("/api/openapi.json", (_req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.json(this.buildOpenApiSpec());
+    });
+
     // ── File editor (agents + workflows .md files) ────────────────────────────
     r.get("/api/files", this.handleAsync(this.readFile.bind(this)));
     r.put("/api/files", this.handleAsync(this.writeFile.bind(this)));
@@ -1026,7 +1032,9 @@ export class ApiServer {
 
     const jobs = allJobs.filter(j => {
       if (j.createdAt < cutoff) return false;
-      if (!["completed", "failed", "rejected"].includes(j.status)) return false;
+      // Include all jobs that have progressed past queued so partial
+      // usage from running/awaiting_approval jobs is visible in the charts.
+      if (j.status === "queued") return false;
       if (instanceId && j.workflowType !== instanceId) return false;
       return true;
     });
@@ -1188,6 +1196,312 @@ export class ApiServer {
     }
     this._settings[key] = value;
     res.json({ key, value, updatedAt: new Date().toISOString() });
+  }
+
+  // ─── OpenAPI spec ─────────────────────────────────────────────────────────────
+
+  private buildOpenApiSpec(): object {
+    return {
+      openapi: "3.0.3",
+      info: {
+        title: "ElevarusOS API",
+        version: "1.0.0",
+        description: "Internal orchestration API for ElevarusOS agent workflows. All endpoints require `x-api-key` header unless running in development mode.",
+      },
+      servers: [{ url: "http://localhost:3001", description: "Local dev" }],
+      components: {
+        securitySchemes: {
+          ApiKey: { type: "apiKey", in: "header", name: "x-api-key" },
+        },
+        schemas: {
+          Job: {
+            type: "object",
+            properties: {
+              jobId:           { type: "string", format: "uuid" },
+              workflowType:    { type: "string", example: "final-expense-reporting" },
+              status:          { type: "string", enum: ["queued","running","awaiting_approval","approved","rejected","failed","completed"] },
+              title:           { type: "string" },
+              createdAt:       { type: "string", format: "date-time" },
+              updatedAt:       { type: "string", format: "date-time" },
+              completedAt:     { type: "string", format: "date-time", nullable: true },
+              currentStage:    { type: "string", nullable: true },
+              completedStages: { type: "integer" },
+              totalStages:     { type: "integer" },
+              approvalPending: { type: "boolean" },
+              error:           { type: "string", nullable: true },
+            },
+          },
+          Stage: {
+            type: "object",
+            properties: {
+              name:        { type: "string" },
+              status:      { type: "string", enum: ["pending","running","completed","failed","skipped"] },
+              attempts:    { type: "integer" },
+              startedAt:   { type: "string", format: "date-time", nullable: true },
+              completedAt: { type: "string", format: "date-time", nullable: true },
+              error:       { type: "string", nullable: true },
+              hasOutput:   { type: "boolean" },
+              usage: {
+                type: "object",
+                nullable: true,
+                properties: {
+                  inputTokens:      { type: "integer" },
+                  outputTokens:     { type: "integer" },
+                  totalTokens:      { type: "integer" },
+                  estimatedCostUsd: { type: "number" },
+                },
+              },
+            },
+          },
+          Instance: {
+            type: "object",
+            properties: {
+              id:           { type: "string" },
+              name:         { type: "string" },
+              baseWorkflow: { type: "string" },
+              enabled:      { type: "boolean" },
+              schedule:     { type: "object" },
+              notify:       { type: "object" },
+            },
+          },
+          TokenAnalytics: {
+            type: "object",
+            properties: {
+              days:   { type: "integer" },
+              totals: {
+                type: "object",
+                properties: {
+                  inputTokens:      { type: "integer" },
+                  outputTokens:     { type: "integer" },
+                  totalTokens:      { type: "integer" },
+                  estimatedCostUsd: { type: "number" },
+                },
+              },
+              byDay: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    day:          { type: "string", format: "date" },
+                    inputTokens:  { type: "integer" },
+                    outputTokens: { type: "integer" },
+                    costUsd:      { type: "number" },
+                    jobCount:     { type: "integer" },
+                  },
+                },
+              },
+              byWorkflow: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    workflowType: { type: "string" },
+                    totalTokens:  { type: "integer" },
+                    costUsd:      { type: "number" },
+                    jobCount:     { type: "integer" },
+                  },
+                },
+              },
+            },
+          },
+          Error: {
+            type: "object",
+            properties: { error: { type: "string" } },
+          },
+        },
+      },
+      security: [{ ApiKey: [] }],
+      paths: {
+        "/api/health": {
+          get: {
+            summary: "Health check",
+            security: [],
+            tags: ["System"],
+            responses: {
+              "200": { description: "Server is healthy", content: { "application/json": { schema: { type: "object", properties: { status: { type: "string" }, uptime: { type: "number" }, ts: { type: "string" } } } } } },
+            },
+          },
+        },
+        "/api/jobs": {
+          get: {
+            summary: "List all jobs",
+            tags: ["Jobs"],
+            parameters: [
+              { name: "status", in: "query", schema: { type: "string" }, description: "Filter by status" },
+              { name: "limit",  in: "query", schema: { type: "integer", default: 50 }, description: "Max results" },
+              { name: "offset", in: "query", schema: { type: "integer", default: 0 },  description: "Pagination offset" },
+            ],
+            responses: {
+              "200": { description: "Job list", content: { "application/json": { schema: { type: "object", properties: { jobs: { type: "array", items: { $ref: "#/components/schemas/Job" } }, total: { type: "integer" } } } } } },
+            },
+          },
+          post: {
+            summary: "Submit a new job",
+            tags: ["Jobs"],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["workflowType", "title"],
+                    properties: {
+                      workflowType: { type: "string", example: "final-expense-reporting" },
+                      title:        { type: "string", example: "Weekly PPC Report" },
+                      metadata:     { type: "object", additionalProperties: true },
+                    },
+                  },
+                },
+              },
+            },
+            responses: {
+              "202": { description: "Job accepted", content: { "application/json": { schema: { $ref: "#/components/schemas/Job" } } } },
+              "400": { description: "Invalid request", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+            },
+          },
+        },
+        "/api/jobs/{jobId}": {
+          get: {
+            summary: "Get job detail",
+            tags: ["Jobs"],
+            parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+            responses: {
+              "200": { description: "Job detail with stages", content: { "application/json": { schema: { allOf: [{ $ref: "#/components/schemas/Job" }, { type: "object", properties: { stages: { type: "array", items: { $ref: "#/components/schemas/Stage" } } } }] } } } },
+              "404": { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+            },
+          },
+        },
+        "/api/jobs/{jobId}/output": {
+          get: {
+            summary: "Get job output (rendered content)",
+            tags: ["Jobs"],
+            parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+            responses: {
+              "200": { description: "Structured output from completed job stages" },
+              "404": { description: "Not found" },
+            },
+          },
+        },
+        "/api/jobs/{jobId}/approve": {
+          post: {
+            summary: "Approve a job awaiting human review",
+            tags: ["Jobs"],
+            parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string" } }],
+            requestBody: { content: { "application/json": { schema: { type: "object", properties: { notes: { type: "string" } } } } } },
+            responses: {
+              "200": { description: "Approved" },
+              "404": { description: "Not found" },
+            },
+          },
+        },
+        "/api/jobs/{jobId}/reject": {
+          post: {
+            summary: "Reject a job awaiting human review",
+            tags: ["Jobs"],
+            parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string" } }],
+            requestBody: { content: { "application/json": { schema: { type: "object", properties: { reason: { type: "string" } } } } } },
+            responses: {
+              "200": { description: "Rejected" },
+              "404": { description: "Not found" },
+            },
+          },
+        },
+        "/api/jobs/{jobId}/cancel": {
+          post: {
+            summary: "Cancel a running or queued job",
+            tags: ["Jobs"],
+            parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string" } }],
+            responses: {
+              "200": { description: "Job cancelled or error reason", content: { "application/json": { schema: { type: "object", properties: { cancelled: { type: "boolean" }, error: { type: "string" } } } } } },
+            },
+          },
+        },
+        "/api/instances": {
+          get: {
+            summary: "List registered agent instances",
+            tags: ["Agents"],
+            responses: {
+              "200": { description: "Instance list", content: { "application/json": { schema: { type: "object", properties: { instances: { type: "array", items: { $ref: "#/components/schemas/Instance" } } } } } } },
+            },
+          },
+        },
+        "/api/schedule": {
+          get: {
+            summary: "Get scheduled agent next-run times",
+            tags: ["Agents"],
+            responses: {
+              "200": { description: "Schedule entries" },
+            },
+          },
+        },
+        "/api/analytics/tokens": {
+          get: {
+            summary: "Token usage analytics",
+            tags: ["Analytics"],
+            parameters: [
+              { name: "days",       in: "query", schema: { type: "integer", default: 30, maximum: 365 }, description: "Lookback window in days" },
+              { name: "instanceId", in: "query", schema: { type: "string" }, description: "Filter by workflow type" },
+            ],
+            responses: {
+              "200": { description: "Token analytics", content: { "application/json": { schema: { $ref: "#/components/schemas/TokenAnalytics" } } } },
+            },
+          },
+        },
+        "/api/integrations": {
+          get: {
+            summary: "List configured integrations",
+            tags: ["Integrations"],
+            responses: {
+              "200": { description: "Integration list with tables and live tools" },
+            },
+          },
+        },
+        "/api/files": {
+          get: {
+            summary: "Read an editable .md file",
+            tags: ["Files"],
+            parameters: [{ name: "path", in: "query", required: true, schema: { type: "string" }, description: "Relative path under src/agents/ or src/workflows/" }],
+            responses: {
+              "200": { description: "File content", content: { "application/json": { schema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, lastModified: { type: "string" } } } } } },
+              "403": { description: "Path not allowed" },
+              "404": { description: "File not found" },
+            },
+          },
+          put: {
+            summary: "Write an editable .md file",
+            tags: ["Files"],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { type: "object", required: ["path", "content"], properties: { path: { type: "string" }, content: { type: "string" } } },
+                },
+              },
+            },
+            responses: {
+              "200": { description: "Written OK" },
+              "403": { description: "Path not allowed" },
+            },
+          },
+        },
+        "/api/settings": {
+          get: {
+            summary: "Get all dashboard settings",
+            tags: ["Settings"],
+            responses: { "200": { description: "Settings map" } },
+          },
+        },
+        "/api/settings/{key}": {
+          put: {
+            summary: "Update a setting value",
+            tags: ["Settings"],
+            parameters: [{ name: "key", in: "path", required: true, schema: { type: "string" } }],
+            requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["value"], properties: { value: {} } } } } },
+            responses: { "200": { description: "Updated" } },
+          },
+        },
+      },
+    };
   }
 
   // ─── Utility ─────────────────────────────────────────────────────────────────
