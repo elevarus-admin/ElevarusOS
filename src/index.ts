@@ -96,9 +96,7 @@ async function main(): Promise<void> {
   const registry = new WorkflowRegistry();
 
   // Blog bots
-  registry.register(buildBlogWorkflowDefinition(notifiers, "blog"));           // default
-  registry.register(buildBlogWorkflowDefinition(notifiers, "elevarus-blog"));
-  registry.register(buildBlogWorkflowDefinition(notifiers, "nes-blog"));
+  registry.register(buildBlogWorkflowDefinition(notifiers, "blog"));           // default — kept for the --once smoke path
 
   // Reporting bots
   registry.register(buildFinalExpenseReportingWorkflow(notifiers));
