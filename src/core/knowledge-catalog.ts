@@ -4,7 +4,7 @@
  * Builds a compact, Markdown-flavored summary of the three ElevarusOS layers
  * every time a question is asked:
  *
- *   1. Instances (MC Agents)  — configured bots in src/instances/
+ *   1. Instances (MC Agents)  — configured bots in src/agents/
  *   2. Workflows              — registered workflow definitions + stage order
  *   3. Integrations           — third-party data sources in src/integrations/
  *

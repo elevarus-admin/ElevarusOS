@@ -21,7 +21,8 @@
     "once:report": "ts-node src/index.ts --once --bot u65-reporting",
     "backfill:lp":     "ts-node scripts/backfill-leadsprosper.ts",
     "backfill:ringba": "ts-node scripts/backfill-ringba.ts",
-    "sync:clickup-catalog": "ts-node scripts/sync-clickup-catalog.ts"
+    "sync:clickup-catalog": "ts-node scripts/sync-clickup-catalog.ts",
+    "sync:google-ads":      "ts-node src/integrations/google-ads/sync-worker.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

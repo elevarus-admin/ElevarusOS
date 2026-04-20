@@ -1,5 +1,9 @@
 {
   "permissions": {
-    "defaultMode": "acceptEdits"
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(npm run typecheck *)",
+      "Bash(cd /Users/shanemcintyre/dev/test/ElevarusOS && npm run typecheck *)"
+    ]
   }
 }

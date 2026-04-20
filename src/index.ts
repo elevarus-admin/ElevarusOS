@@ -55,6 +55,7 @@ import { Scheduler }       from "./core/scheduler";
 import { ApiServer }       from "./api/server";
 import { LeadsProsperSyncWorker } from "./integrations/leadsprosper";
 import { RingbaSyncWorker }       from "./integrations/ringba";
+import { GoogleAdsSyncWorker }    from "./integrations/google-ads";
 
 // Intake adapters
 import { ClickUpIntakeAdapter } from "./adapters/intake/clickup.adapter";
@@ -69,6 +70,7 @@ import { buildBlogWorkflowDefinition }         from "./workflows/blog/blog.workf
 import { buildFinalExpenseReportingWorkflow }   from "./workflows/final-expense-reporting/final-expense-reporting.workflow";
 import { buildU65ReportingWorkflow }            from "./workflows/u65-reporting/u65-reporting.workflow";
 import { buildHvacReportingWorkflow }           from "./workflows/hvac-reporting/hvac-reporting.workflow";
+import { buildHvacThumbtackImportWorkflow }     from "./workflows/hvac-thumbtack-import/hvac-thumbtack-import.workflow";
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
@@ -101,6 +103,9 @@ async function main(): Promise<void> {
   registry.register(buildFinalExpenseReportingWorkflow(notifiers));
   registry.register(buildU65ReportingWorkflow(notifiers));
   registry.register(buildHvacReportingWorkflow(notifiers));
+
+  // Background data-import workers
+  registry.register(buildHvacThumbtackImportWorkflow(notifiers));
 
   // ─── Single-run test mode (--once) ────────────────────────────────────────
   // Runs a workflow directly via Orchestrator — no daemon required.
@@ -171,10 +176,12 @@ async function main(): Promise<void> {
   // Keep Supabase in sync with external platforms. Each worker runs on its own
   // cron, no-ops if its API key / Supabase credentials are missing.
 
-  const lpSync     = new LeadsProsperSyncWorker();
-  const ringbaSync = new RingbaSyncWorker();
+  const lpSync        = new LeadsProsperSyncWorker();
+  const ringbaSync    = new RingbaSyncWorker();
+  const googleAdsSync = new GoogleAdsSyncWorker();
   lpSync.start();
   ringbaSync.start();
+  googleAdsSync.start();
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
 
@@ -183,6 +190,7 @@ async function main(): Promise<void> {
     scheduler.stop();
     lpSync.stop();
     ringbaSync.stop();
+    googleAdsSync.stop();
     process.exit(0);
   };
 

@@ -43,3 +43,32 @@ export interface MetaSpendOptions {
   endDate:      string;    // YYYY-MM-DD
   campaignIds?: string[];  // optional — filters to specific campaigns
 }
+
+/**
+ * Summary row from /me/adaccounts. Each entry is one ad account the
+ * configured System User token has been granted access to. Use to discover
+ * accounts before configuring an instance.
+ *
+ * `accountStatus` mapping (Meta enum → label):
+ *   1=active, 2=disabled, 3=unsettled, 7=pending_risk_review,
+ *   9=in_grace_period, 100=pending_closure, 101=closed,
+ *   102=pending_settlement
+ */
+export interface MetaAdAccountSummary {
+  /** Numeric ID without the `act_` prefix — what goes in instance.md `meta.adAccountId`. */
+  accountId:    string;
+  /** Display name in Meta Ads Manager. */
+  name:         string;
+  /** Owning Business Manager name (optional — null when account is personal-owned). */
+  businessName: string | null;
+  /** Numeric Meta status code. See enum mapping in the JSDoc above. */
+  accountStatus: number;
+  /** Human-readable status label derived from accountStatus. */
+  status:       string;
+  /** ISO currency code (USD, EUR, ...). */
+  currency:     string;
+  /** IANA-ish timezone Meta returns (e.g. "America/Los_Angeles"). */
+  timezone:     string;
+  /** Lifetime amount spent in account-currency minor units (Meta returns string). */
+  amountSpent?: string;
+}

@@ -11,7 +11,7 @@ import { scaffoldAllWorkspaces, scaffoldInstanceWorkspace } from "./workspace-sc
 import { logger } from "./logger";
 import { config } from "../config";
 
-const INSTANCES_DIR = path.resolve(__dirname, "../instances");
+const INSTANCES_DIR = path.resolve(__dirname, "../agents");
 
 /**
  * MCWorker — the core daemon-mode engine in the refactored architecture.
@@ -534,7 +534,23 @@ export class MCWorker {
       // (blog/content workflows). Hardcoding required:true caused confusion in
       // the MC task metadata even though it never actually blocked execution.
       approval:  { required: false, approved: false },
+      // Forward pass-through metadata so workflow stages (e.g. clickup-sync)
+      // can read external-system IDs the MC task was created with. We strip
+      // ElevarusOS-internal keys (request, elevarus_job_id) and surface
+      // anything else verbatim.
+      metadata: this.extractPassthroughMetadata(meta),
     };
+  }
+
+  /** Pass-through MC metadata → Job.metadata. Drops internal-only keys. */
+  private extractPassthroughMetadata(meta: Record<string, unknown>): Record<string, unknown> | undefined {
+    const INTERNAL_KEYS = new Set(["request", "elevarus_job_id"]);
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(meta)) {
+      if (INTERNAL_KEYS.has(k)) continue;
+      out[k] = v;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   // ── MC description / metadata helpers ─────────────────────────────────────

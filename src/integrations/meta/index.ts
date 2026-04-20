@@ -25,4 +25,5 @@ export type {
   MetaSpendReport,
   MetaSpendOptions,
   MetaInsightRecord,
+  MetaAdAccountSummary,
 }                              from "./types";

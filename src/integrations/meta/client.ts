@@ -1,5 +1,17 @@
 import { logger } from "../../core/logger";
-import type { MetaInsightRecord, MetaSpendOptions } from "./types";
+import type { MetaInsightRecord, MetaSpendOptions, MetaAdAccountSummary } from "./types";
+
+/** Meta's numeric `account_status` → human label. */
+const ACCOUNT_STATUS_LABELS: Record<number, string> = {
+  1:   "active",
+  2:   "disabled",
+  3:   "unsettled",
+  7:   "pending_risk_review",
+  9:   "in_grace_period",
+  100: "pending_closure",
+  101: "closed",
+  102: "pending_settlement",
+};
 
 const GRAPH_API_VERSION = "v21.0";
 const GRAPH_BASE        = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -37,6 +49,55 @@ export class MetaAdsClient {
     if (!this.enabled) {
       logger.info("MetaAdsClient: not configured (set META_ACCESS_TOKEN)");
     }
+  }
+
+  // ── Ad account discovery ──────────────────────────────────────────────────
+
+  /**
+   * List every ad account the configured System User token can access.
+   *
+   * GET /me/adaccounts
+   * https://developers.facebook.com/docs/marketing-api/reference/user/adaccounts/
+   *
+   * Use this to discover accounts before wiring them into an instance.md
+   * `meta.adAccountId` field. The returned `accountId` is already stripped
+   * of the `act_` prefix and ready to drop into config.
+   *
+   * Pages 200 at a time; loops until exhausted.
+   */
+  async listAdAccounts(): Promise<MetaAdAccountSummary[]> {
+    if (!this.enabled) return [];
+
+    const params = new URLSearchParams({
+      fields:       "account_id,name,account_status,currency,timezone_name,business_name,amount_spent",
+      limit:        "200",
+      access_token: this.accessToken,
+    });
+
+    const all: MetaAdAccountSummary[] = [];
+    let nextUrl: string | null = `${GRAPH_BASE}/me/adaccounts?${params.toString()}`;
+
+    while (nextUrl) {
+      const data = await this.getUrl(nextUrl);
+      if (!data) break;
+      const rows: any[] = data.data ?? [];
+      for (const r of rows) {
+        const statusCode = Number(r.account_status ?? 0);
+        all.push({
+          accountId:     String(r.account_id ?? ""),
+          name:          String(r.name ?? ""),
+          businessName:  r.business_name ? String(r.business_name) : null,
+          accountStatus: statusCode,
+          status:        ACCOUNT_STATUS_LABELS[statusCode] ?? `unknown(${statusCode})`,
+          currency:      String(r.currency ?? ""),
+          timezone:      String(r.timezone_name ?? ""),
+          amountSpent:   r.amount_spent ? String(r.amount_spent) : undefined,
+        });
+      }
+      nextUrl = data.paging?.next ?? null;
+    }
+
+    return all;
   }
 
   // ── Insights ───────────────────────────────────────────────────────────────

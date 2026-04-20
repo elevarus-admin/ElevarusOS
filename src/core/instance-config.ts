@@ -46,6 +46,23 @@ export interface InstanceMeta {
 }
 
 /**
+ * Google Ads integration config — used by reporting workflow instances.
+ * The customer ID (10-digit CID, no dashes) is the per-agent identifier;
+ * different agents point to different sub-accounts under the shared MCC
+ * (989-947-7831). One set of GOOGLE_ADS_* env vars covers all sub-accounts.
+ */
+export interface InstanceGoogleAds {
+  /** Numeric customer ID (10 digits, no dashes). e.g. "8951980121" for HVAC. */
+  customerId: string;
+  /**
+   * Optional campaign ID filter.
+   * When empty (default), total account-level spend is used.
+   * When provided, spend is filtered to only these campaigns.
+   */
+  campaignIds?: string[];
+}
+
+/**
  * ClickUp integration config — opt-in per instance. When present and
  * `syncEnabled` is true, the `clickup-sync` workflow stage posts a completion
  * comment + status update on the originating ClickUp task at end-of-job.
@@ -65,6 +82,38 @@ export interface InstanceClickUp {
     completed:  string;
     failed:     string;
   };
+}
+
+/**
+ * Everflow integration config — opt-in per instance. When present, the
+ * data-collection stage pulls payouts on the configured offer for the
+ * report period and excludes any partner whose name matches a pattern.
+ */
+export interface InstanceEverflow {
+  /** Numeric Everflow `network_offer_id` (e.g. 8 for U65). */
+  offerId: number;
+  /** Case-insensitive substrings — partners whose name contains ANY pattern are dropped. */
+  excludePartnerPatterns?: string[];
+}
+
+/**
+ * Tier-1 fixed-cost config — flat daily fee that accrues only during
+ * business hours. Used in U65-style P&L reports where a platform fee or
+ * service contract adds to the cost basis.
+ *
+ * Use `accruedTier1Cost(now, cfg)` from `core/cost-helpers.ts` to compute
+ * the as-of value (full daily for past days, prorated for today, zero
+ * before business-hours start).
+ */
+export interface InstanceTier1Cost {
+  /** Flat fee per business day, USD. */
+  dailyAmount: number;
+  /** Hour of day (0-23) business hours start. e.g. 10 for 10:00 AM. */
+  businessHoursStart: number;
+  /** Hour of day (0-23) business hours end. e.g. 18 for 6:00 PM. */
+  businessHoursEnd: number;
+  /** IANA timezone string for the business hours. e.g. "America/Los_Angeles". */
+  timezone: string;
 }
 
 /** Ringba integration config — used by ppc-campaign-report workflow instances. */
@@ -119,8 +168,14 @@ export interface InstanceConfig {
   ringba?: InstanceRingba;
   /** Meta Ads integration config (reporting workflow instances) */
   meta?: InstanceMeta;
+  /** Google Ads integration config (reporting workflow instances) */
+  googleAds?: InstanceGoogleAds;
   /** ClickUp integration config (any instance opting into clickup-sync) */
   clickup?: InstanceClickUp;
+  /** Everflow integration config (cost reporting via partner-network payouts) */
+  everflow?: InstanceEverflow;
+  /** Flat daily fee that accrues during business hours only. */
+  tier1Cost?: InstanceTier1Cost;
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -146,9 +201,12 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
   const brand    = (data.brand    as any) ?? {};
   const notify   = (data.notify   as any) ?? {};
   const schedule = (data.schedule as any) ?? {};
-  const ringba   = (data.ringba   as any) ?? null;
-  const meta     = (data.meta     as any) ?? null;
-  const clickup  = (data.clickup  as any) ?? null;
+  const ringba    = (data.ringba    as any) ?? null;
+  const meta      = (data.meta      as any) ?? null;
+  const googleAds = (data.googleAds as any) ?? null;
+  const clickup   = (data.clickup   as any) ?? null;
+  const everflow = (data.everflow as any) ?? null;
+  const tier1    = (data.tier1Cost as any) ?? null;
 
   return {
     id: String(data.id ?? instanceId),
@@ -187,6 +245,14 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
             : undefined,
         }
       : undefined,
+    googleAds: googleAds?.customerId
+      ? {
+          customerId: String(googleAds.customerId).replace(/-/g, ""),
+          campaignIds: Array.isArray(googleAds.campaignIds)
+            ? googleAds.campaignIds.map(String).filter(Boolean)
+            : undefined,
+        }
+      : undefined,
     clickup: clickup?.listId
       ? {
           listId:      String(clickup.listId),
@@ -198,6 +264,22 @@ export function loadInstanceConfig(instanceId: string): InstanceConfig {
             completed: String(clickup.statusMap?.completed ?? "completed"),
             failed:    String(clickup.statusMap?.failed    ?? "needs input"),
           },
+        }
+      : undefined,
+    everflow: (everflow && everflow.offerId !== undefined && everflow.offerId !== null)
+      ? {
+          offerId: Number(everflow.offerId),
+          excludePartnerPatterns: Array.isArray(everflow.excludePartnerPatterns)
+            ? everflow.excludePartnerPatterns.map(String).filter(Boolean)
+            : undefined,
+        }
+      : undefined,
+    tier1Cost: (tier1 && tier1.dailyAmount !== undefined && tier1.dailyAmount !== null)
+      ? {
+          dailyAmount:        Number(tier1.dailyAmount),
+          businessHoursStart: Number(tier1.businessHoursStart ?? 9),
+          businessHoursEnd:   Number(tier1.businessHoursEnd   ?? 17),
+          timezone:           String(tier1.timezone ?? "America/Los_Angeles"),
         }
       : undefined,
   };

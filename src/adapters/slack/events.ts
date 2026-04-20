@@ -27,7 +27,7 @@ import { buildKnowledgeCatalog } from "../../core/knowledge-catalog";
 import { WorkflowRegistry } from "../../core/workflow-registry";
 import { IJobStore } from "../../core/job-store";
 import { QA_TOOLS, claudeWantsBroadcast } from "../../core/qa-tools";
-import { getIntegrationTools } from "../../core/integration-registry";
+import { getIntegrationTools, renderIntegrationsForPrompt } from "../../core/integration-registry";
 import { DATA_TOOLS } from "./data-tools";
 import { ingestSlackImages, type SlackEventFile } from "./image-ingest";
 import { nowPstSummary } from "../../core/date-time";
@@ -417,10 +417,12 @@ function buildSystemPrompt(catalog: string, context?: ChannelContext): string {
     "## ElevarusOS has three layers",
     "1. **Instances (MC Agents)** — named bot deployments (e.g. `hvac-reporting`, `elevarus-blog`). Each has a brand, schedule, and optional integration config.",
     "2. **Workflows** — reusable multi-stage templates (e.g. the blog workflow or the PPC reporting workflow). Instances pick one as their `baseWorkflow`.",
-    "3. **Integrations** — third-party data sources (ringba, leadsprosper, meta) any workflow can read from.",
+    "3. **Integrations** — third-party data sources any workflow can read from. The full list with status, tools, and example questions is in the *Available Integrations* block below — read that before guessing.",
     "",
     "## Orientation catalog (static snapshot)",
     catalog,
+    "",
+    renderIntegrationsForPrompt(),
     "",
     "## Tools available",
     "You have tools for live, drill-down state. Prefer calling a tool over guessing or relying on the static catalog above.",
@@ -441,6 +443,10 @@ function buildSystemPrompt(catalog: string, context?: ChannelContext): string {
     "- `query_jobs` / `get_job_output` — workflow run history",
     "- `get_ringba_revenue` — simple instance-bound revenue rollup (use `supabase_query` for anything with multiple campaigns, publishers, or custom filters)",
     "- `get_meta_spend` — simple instance-bound Meta spend",
+    "- `meta_list_ad_accounts` — discover every Meta ad account the System User token can see (id, name, status, currency)",
+    "- `everflow_list_offers` / `everflow_offer_payouts` — Everflow partner-network: list offers, sum payouts on one offer over a PT date range with optional partner-name exclusion (e.g. drop INTERNAL test partners)",
+    "- `clickup_list_lists` / `clickup_list_members` / `clickup_list_tasks` / `clickup_find_tasks` / `clickup_get_task` / `clickup_get_task_comments` — ClickUp read tools (triage, task lookup)",
+    "- `clickup_update_task` / `clickup_add_comment` / `clickup_create_task` / `clickup_trigger_agent` — ClickUp write tools (confirm with the user before calling)",
     "- `broadcast_reply` — reply is also posted to the main channel (see rule below)",
     "",
     "Rules of thumb:",

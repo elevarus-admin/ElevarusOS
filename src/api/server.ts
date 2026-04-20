@@ -53,10 +53,7 @@ import {
   SlackEventEnvelope,
 } from "../adapters/slack/events";
 import { config } from "../config";
-import { manifest as ringbaManifest }  from "../integrations/ringba/manifest";
-import { manifest as lpManifest }      from "../integrations/leadsprosper/manifest";
-import { manifest as clickupManifest } from "../integrations/clickup/manifest";
-import { manifest as metaManifest }    from "../integrations/meta/manifest";
+import { INTEGRATION_MANIFESTS } from "../core/integration-registry";
 
 const AGENTS_DIR = path.resolve(__dirname, "../agents");
 
@@ -74,17 +71,47 @@ export class ApiServer {
   constructor(private readonly options: ApiServerOptions) {
     // CORS — allow the dashboard (and any configured origin) to call the API
     // from the browser. The dashboard runs on port 3000; the API on 3001.
-    const allowedOrigins = (process.env.CORS_ORIGINS ?? "http://localhost:3000")
+    //
+    // Default whitelist covers common dev variations: http/https × localhost/127.0.0.1
+    // on port 3000. The previous default ("http://localhost:3000" only) silently
+    // failed when the dashboard was loaded via 127.0.0.1, https, or a tunnel —
+    // CORS would skip its headers and the browser would throw "Failed to fetch."
+    //
+    // For ngrok/LAN/production origins, set CORS_ORIGINS=<csv> in .env.
+    // Anywhere/wildcard: set CORS_ORIGINS=*.
+    const DEFAULT_DEV_ORIGINS = [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://localhost:3000",
+      "https://127.0.0.1:3000",
+    ];
+    const explicitOrigins = (process.env.CORS_ORIGINS ?? "")
       .split(",")
-      .map((o) => o.trim());
+      .map((o) => o.trim())
+      .filter(Boolean);
+    const allowedOrigins = explicitOrigins.length > 0
+      ? explicitOrigins
+      : DEFAULT_DEV_ORIGINS;
+
+    /** True if the request origin is allowed. Wildcard or exact match. */
+    const isOriginAllowed = (origin: string): boolean => {
+      if (!origin) return false;
+      if (allowedOrigins.includes("*")) return true;
+      if (allowedOrigins.includes(origin)) return true;
+      return false;
+    };
 
     this.app.use((req: Request, res: Response, next: NextFunction) => {
       const origin = req.headers.origin ?? "";
-      if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
+      if (isOriginAllowed(origin)) {
         res.setHeader("Access-Control-Allow-Origin",  origin);
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key, Authorization");
         res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("Vary",                         "Origin");
+      } else if (origin) {
+        // Helpful one-time warning per unknown origin so we know to add it.
+        logUnknownOrigin(origin, allowedOrigins);
       }
       if (req.method === "OPTIONS") {
         res.sendStatus(204);
@@ -1189,9 +1216,10 @@ export class ApiServer {
   // ─── Integrations ─────────────────────────────────────────────────────────────
 
   private async getIntegrations(_req: Request, res: Response): Promise<void> {
-    const manifests = [ringbaManifest, lpManifest, clickupManifest, metaManifest];
-
-    const integrations = manifests.map(m => ({
+    // Pull every registered integration from the central registry — adding a
+    // new manifest in src/core/integration-registry.ts auto-surfaces it on the
+    // dashboard. (The previous hand-curated array silently missed Everflow.)
+    const integrations = INTEGRATION_MANIFESTS.map(m => ({
       id:          m.id,
       name:        m.name,
       description: m.description,
@@ -1611,4 +1639,21 @@ export class ApiServer {
       fn(req, res).catch(next);
     };
   }
+}
+
+// ─── CORS helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Warn once per unknown origin so we know which one to add to CORS_ORIGINS
+ * — but only once, otherwise every poll-interval browser request would log.
+ */
+const _seenUnknownOrigins = new Set<string>();
+function logUnknownOrigin(origin: string, allowedOrigins: string[]): void {
+  if (_seenUnknownOrigins.has(origin)) return;
+  _seenUnknownOrigins.add(origin);
+  logger.warn("CORS: blocked request from unconfigured origin", {
+    origin,
+    allowed: allowedOrigins,
+    fix:     `Add this origin to CORS_ORIGINS in .env (comma-separated). e.g. CORS_ORIGINS=${[...allowedOrigins, origin].join(",")}`,
+  });
 }
