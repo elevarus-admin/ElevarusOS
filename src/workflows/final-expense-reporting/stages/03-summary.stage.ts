@@ -5,6 +5,10 @@ import { Job } from "../../../models/job.model";
 import { claudeJSON } from "../../../core/claude-client";
 import { logger } from "../../../core/logger";
 import { AnalysisOutput } from "./02-analysis.stage";
+import {
+  buildCompactSlackFormatSpec,
+  alertEmojiFor,
+} from "../../_shared/compact-slack-format";
 
 export interface SummaryOutput {
   slackMessage:   string;
@@ -51,7 +55,7 @@ export class SummaryStage implements IStage {
       `Return only valid JSON — no markdown fences, no explanation.`,
     ].filter(Boolean).join("\n");
 
-    const alertEmoji = analysis.alertLevel === "green" ? "✅" : analysis.alertLevel === "yellow" ? "⚠️" : "🚨";
+    const alertEmoji = alertEmojiFor(analysis.alertLevel);
 
     const userPrompt = [
       `Produce the final report for: ${job.request.title}`,
@@ -60,20 +64,12 @@ export class SummaryStage implements IStage {
       JSON.stringify(analysis, null, 2),
       `</analysis>`,
       ``,
-      `The slackMessage field MUST follow this exact compact format — no deviations, no extra lines:`,
-      ``,
-      `${alertEmoji} *FE · <date e.g. Apr 17>*`,
-      ``,
-      `*Today* · 📞 <N> calls, <N> billable (<rate>%) · 💰 $<X,XXX> · 💸 $<X,XXX> spend · 📊 <($X,XXX) or +$X,XXX> ROI <+/-><%>`,
-      `*MTD* <e.g. Apr 1–17> · 📞 <N> calls, <N> billable (<rate>%) · 💰 $<X,XXX> · 💸 $<X,XXX> spend · 📊 <($X,XXX) or +$X,XXX> ROI <+/-><%>`,
-      ``,
-      `Rules:`,
-      `- Exactly 4 lines: alert header, blank line, Today line, MTD line`,
-      `- No Trends section, no bullet points, no extra sections`,
-      `- Dollar amounts rounded to nearest dollar (no cents), with commas`,
-      `- Negative P&L as ($1,848) — parentheses, no minus sign`,
-      `- Positive P&L as +$1,234`,
-      `- Omit 💸 spend and 📊 P&L tokens only if that data is null`,
+      buildCompactSlackFormatSpec({
+        shortName:    "FE",
+        alertEmoji,
+        volumeToken:  "📞 <N> calls, <N> billable (<rate>%)",
+        periodLabels: ["Today", "MTD <Mon D–D>"],
+      }),
       ``,
       `Return this exact JSON — no markdown fences:`,
       JSON.stringify({

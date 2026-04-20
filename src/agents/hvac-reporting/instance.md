@@ -34,9 +34,9 @@ meta:
 
 schedule:
   enabled: true
-  cron: "0 9,11,13,15,17 * * 1-5"  # Mon-Fri every 2h: 9am, 11am, 1pm, 3pm, 5pm EST
+  cron: "0 9 * * 1-5"              # Once daily, Mon-Fri at 9am EST
   timezone: America/New_York
-  description: Weekday campaign report every 2 hours 9am-5pm EST
+  description: Weekday campaign report, once daily at 9am EST (reports yesterday + MTD; Thumbtack sheet updates overnight)
 
 campaign:
   name: HVAC Lead Generation

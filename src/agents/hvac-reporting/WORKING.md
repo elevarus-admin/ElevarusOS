@@ -23,8 +23,8 @@ Pending sources:
 | Setting | Value |
 |---------|-------|
 | Slack channel | `#cli-hvac` (placeholder — confirm) |
-| Schedule | Mon–Fri every 2h: 9am, 11am, 1pm, 3pm, 5pm EST |
-| Cron expression | `0 9,11,13,15,17 * * 1-5` |
+| Schedule | Once daily, Mon–Fri at 9am EST (reports yesterday + MTD) |
+| Cron expression | `0 9 * * 1-5` |
 | Timezone | `America/New_York` |
 | Base workflow | `ppc-campaign-report` |
 | Meta ad account | `24568971736103024` (SaveOnMyQuote.com. - HVAC) |

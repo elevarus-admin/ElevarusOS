@@ -5,6 +5,7 @@ import { Job } from "../../../models/job.model";
 import { claudeJSON } from "../../../core/claude-client";
 import { logger } from "../../../core/logger";
 import { AnalysisOutput } from "./02-analysis.stage";
+import { buildCompactSlackFormatSpec } from "../../_shared/compact-slack-format";
 
 export interface SummaryOutput {
   slackMessage:   string;
@@ -58,12 +59,19 @@ export class SummaryStage implements IStage {
       JSON.stringify(analysis, null, 2),
       `</analysis>`,
       ``,
-      `Return this exact JSON structure:`,
+      // alertEmoji omitted → Claude substitutes based on the alertLevel it picks.
+      buildCompactSlackFormatSpec({
+        shortName:    "U65",
+        volumeToken:  "📞 <N> calls, <N> billable (<rate>%)",
+        periodLabels: ["Today", "MTD <Mon D–D>"],
+      }),
+      ``,
+      `Return this exact JSON — no markdown fences:`,
       JSON.stringify({
-        slackMessage:   "<Slack-formatted report following the format defined in your MISSION.md. Copy-pasteable as-is.>",
+        slackMessage:   "<Slack message following the exact format above, with <emoji> substituted to match alertLevel>",
         markdownReport: "<Full Markdown report with ## headings and metric tables for the agent workspace.>",
-        subject:        "<Email/notification subject line>",
-        oneLiner:       "<Single sentence headline with the most important number. e.g. '61 billable calls, $2,881 revenue MTD.'>",
+        subject:        "<e.g. 'U65 Report — Apr 20 | MTD: ($1,234)'>",
+        oneLiner:       "<One sentence MTD summary with the most important numbers>",
         alertLevel:     "green | yellow | red",
       }, null, 2),
     ].join("\n");

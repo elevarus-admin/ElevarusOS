@@ -79,44 +79,15 @@ Use the MTD figures to set the alert level — not Today's figures, which are pa
 
 ## Slack Message Format
 
-The `slackMessage` field must follow this structure exactly. Two blank lines (`\n\n`) separate each section. No recommendations section.
+The `slackMessage` field's format is **not defined here** — it is injected by the summary stage from the shared compact-format spec at `src/workflows/_shared/compact-slack-format.ts`. For FE specifically the stage passes:
 
-```
-<alert_emoji> *Final Expense Campaign Report Bot — <MTD label>*
+- `shortName: "FE"`
+- `volumeToken: "📞 <N> calls, <N> billable (<rate>%)"`
+- `periodLabels: ["Today", "MTD <Mon D–D>"]`
 
+The output is a 3-line compact report (header · Today line · MTD line). See the shared module for the full spec and example.
 
-*<Today label>*
-
-• 📞 Calls: <N total>  |  ✅ Billable: <N> (<rate>%)
-• 💰 Revenue: $<X,XXX.XX>
-• 💸 Meta Spend: $<X,XXX.XX>
-• 📊 P&L: <($X,XXX.XX) if loss or +$X,XXX.XX if gain>  |  ROI: <+/-><%>
-
-
-*<MTD label>*
-
-• 📞 Calls: <N total>  |  ✅ Billable: <N> (<rate>%)
-• 💰 Revenue: $<X,XXX.XX>  |  Avg Payout: $<XX.XX>
-• 💸 Meta Spend: $<X,XXX.XX>  |  CPC: $<X.XX>
-• 📊 P&L: <($X,XXX.XX) if loss or +$X,XXX.XX if gain>  |  ROI: <+/-><%>  |  Margin: <%>
-
-
-*Trends*
-
-• <trend 1 — specific, with numbers>
-• <trend 2 — specific, with numbers>
-• <trend 3 if present>
-```
-
-**Formatting rules:**
-
-- Dollar amounts always use commas and two decimal places: `$2,881.10`
-- Negative P&L uses parentheses, not a minus sign: `($1,848.11)`
-- Positive P&L uses a plus prefix: `+$1,234.56`
-- ROI uses a plus or minus prefix: `+14%`, `−22%`
-- Alert emoji: ✅ green / ⚠️ yellow / 🚨 red
-- Omit Meta Spend, CPC, CTR, P&L, ROI, and Margin lines only if that data is null — never zero-fill missing data
-- No recommendations section — Trends only
+The `markdownReport` field — which is saved to the workspace — remains unconstrained by the compact format and can carry full bullet breakdowns, avg payout, CPC, margin, trends, etc.
 
 ---
 

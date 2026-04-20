@@ -14,5 +14,8 @@ dashboard/.next/
 dashboard/node_modules/
 dashboard/tsconfig.tsbuildinfo
 
+# Reporting agent runtime workspace (regenerated per-run; not source)
+src/instances/*/workspace/
+
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock

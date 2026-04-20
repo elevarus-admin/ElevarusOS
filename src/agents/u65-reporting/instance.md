@@ -45,10 +45,10 @@ tier1Cost:
 #   accountNumber: "F119KGNK"
 
 schedule:
-  enabled: true
-  cron: "0 9,11,13,15,17 * * 1-5"  # Mon-Fri every 2h: 9am, 11am, 1pm, 3pm, 5pm EST
+  enabled: false                   # PAUSED 2026-04-20 — awaiting further training before resuming scheduled runs
+  cron: "0 9,11,13,15,17 * * 1-5"  # (prior cadence; kept for reference when re-enabling)
   timezone: America/New_York
-  description: Weekday campaign report every 2 hours 9am-5pm EST
+  description: PAUSED — re-enable once report shape + cadence are finalized
 
 campaign:
   name: U65 Private Health Insurance
