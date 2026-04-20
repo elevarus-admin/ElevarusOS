@@ -167,6 +167,29 @@ export class ApiServer {
       res.json(this.buildOpenApiSpec());
     });
 
+    // ── Scalar API Reference (standalone HTML — no Next.js CSS pollution) ─────
+    // Rendered in an iframe from the dashboard so Tailwind never touches it.
+    r.get("/api-reference", (_req, res) => {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ElevarusOS API Reference</title>
+  <style>body { margin: 0; }</style>
+</head>
+<body>
+  <script
+    id="api-reference"
+    data-url="/api/openapi.json"
+    src="https://cdn.jsdelivr.net/npm/@scalar/api-reference/dist/browser/standalone.min.js">
+  </script>
+</body>
+</html>`);
+    });
+
     // ── File editor (agents + workflows .md files) ────────────────────────────
     r.get("/api/files", this.handleAsync(this.readFile.bind(this)));
     r.put("/api/files", this.handleAsync(this.writeFile.bind(this)));
