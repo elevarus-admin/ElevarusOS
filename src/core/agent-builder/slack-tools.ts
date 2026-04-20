@@ -292,8 +292,135 @@ export const createAgentPrdTicketTool: QATool = {
   },
 };
 
+// ─── agent_builder_step (the fast path) ─────────────────────────────────────
+
+/**
+ * Single-tool Agent Builder step. Replaces propose_agent + refine_agent_spec
+ * for the Slack flow — one Claude inference roundtrip per Slack message
+ * instead of two.
+ *
+ * Behavior:
+ *   - Auto-resumes the open session for (slack_user, channel, thread)
+ *   - If `answer` is provided → submits it as the response to the current
+ *     question, advances state, returns the next question
+ *   - If `answer` is omitted → returns the current question (turn 1, or
+ *     resume case where Claude just wants to know where we are)
+ *   - On readyToFinalize, the bot should switch to create_agent_prd_ticket
+ *
+ * Backwards compat: propose_agent + refine_agent_spec still exist (used
+ * by smoke tests and any external callers) — only the Slack surface
+ * changes.
+ */
+export const agentBuilderStepTool: QATool = {
+  spec: {
+    name: "agent_builder_step",
+    description:
+      "Use this for EVERY Agent Builder turn in Slack. ONE call per Slack message. " +
+      "Auto-resumes any open session for this Slack thread (no sessionId needed). " +
+      "When the user just answered the current question, pass their answer in `answer` — " +
+      "the tool submits it and returns the NEXT question. When starting a fresh session, " +
+      "OMIT `answer` — tool returns Q1. After readyToFinalize=true, switch to create_agent_prd_ticket.",
+    input_schema: {
+      type: "object",
+      properties: {
+        answer: {
+          type: "string",
+          description: "The user's answer to the CURRENT question, verbatim or lightly normalized. OMIT on the very first call (no answer to submit yet) — the tool will return Q1.",
+        },
+      },
+    },
+  },
+  async execute(input, ctx) {
+    const startedAt = Date.now();
+    const params = (input ?? {}) as { answer?: string };
+
+    try {
+      const session = await startOrResumeSession({
+        source:          "slack",
+        createdBy:       ctx.slack?.userId,
+        slackChannelId:  ctx.slack?.channelId,
+        slackThreadTs:   ctx.slack?.threadTs,
+      });
+
+      // What index are we expecting an answer for? 0 → Q1.
+      const expectedIndex =
+        session.current_question_index === 0 ? 1 :
+        session.current_question_index === READY_TO_FINALIZE_INDEX ? null :
+        session.current_question_index;
+
+      // Path A: answer submitted, advance state.
+      if (params.answer && expectedIndex !== null) {
+        const result = await submitAnswer({
+          sessionId:     session.id,
+          questionIndex: expectedIndex,
+          answer:        params.answer,
+        });
+        await auditQueryTool(ctx, {
+          tool_name:  "agent_builder_step",
+          params:     { hasAnswer: true, expectedIndex },
+          status:     "ok",
+          elapsed_ms: Date.now() - startedAt,
+        });
+        return {
+          sessionId:        result.session.id,
+          questionIndex:    result.nextIndex,
+          currentQuestion: result.nextQuestion,
+          totalQuestions:  CANONICAL_QUESTIONS.length,
+          readyToFinalize: result.readyToFinalize,
+          justResumed:     false,
+        };
+      }
+
+      // Path B: no answer — just return current question (turn 1 or pure resume).
+      const currentQuestion = expectedIndex
+        ? getCanonicalQuestion(expectedIndex)?.canonical ?? null
+        : null;
+
+      await auditQueryTool(ctx, {
+        tool_name:  "agent_builder_step",
+        params:     { hasAnswer: false, expectedIndex },
+        status:     "ok",
+        elapsed_ms: Date.now() - startedAt,
+      });
+      return {
+        sessionId:        session.id,
+        questionIndex:    expectedIndex,
+        currentQuestion,
+        totalQuestions:  CANONICAL_QUESTIONS.length,
+        readyToFinalize: session.current_question_index === READY_TO_FINALIZE_INDEX,
+        justResumed:     session.transcript.length > 1,
+      };
+    } catch (err) {
+      const elapsed_ms = Date.now() - startedAt;
+      if (err instanceof AgentBuilderError) {
+        logger.info("agent_builder_step enforcement block", { code: err.code, details: err.details });
+        await auditQueryTool(ctx, {
+          tool_name:     "agent_builder_step",
+          params,
+          status:        "error",
+          elapsed_ms,
+          error_message: `${err.code}: ${err.message}`,
+        });
+        return { error: err.code, message: err.message, ...(err.details ?? {}) };
+      }
+      logger.warn("agent_builder_step failed", { error: String(err) });
+      await auditQueryTool(ctx, {
+        tool_name:     "agent_builder_step",
+        params,
+        status:        "error",
+        elapsed_ms,
+        error_message: String(err),
+      });
+      return { error: String(err) };
+    }
+  },
+};
+
 export const agentBuilderLiveTools = [
+  agentBuilderStepTool,
+  createAgentPrdTicketTool,
+  // Legacy — kept exported for the smoke-test script + any external callers,
+  // but Slack uses agent_builder_step now (one inference round instead of two).
   proposeAgentTool,
   refineAgentSpecTool,
-  createAgentPrdTicketTool,
 ];
