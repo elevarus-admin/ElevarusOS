@@ -1,0 +1,200 @@
+# DigitalOcean App Platform spec for ElevarusOS
+#
+# ─── What this defines ──────────────────────────────────────────────────────
+#
+# One App with two services:
+#   - api       Node + Express orchestrator + cron workers + REST API (port 3001)
+#   - dashboard Next.js operations dashboard (port 3000)
+#
+# Routing on the same App URL (longest-prefix match):
+#   /api/*          → api service (REST + Slack webhook receiver)
+#   /api-reference  → api service (Scalar HTML)
+#   /openapi.json   → api service
+#   /*              → dashboard service (catch-all)
+#
+# Deploy trigger: any push to `main` on github.com/elevarus-admin/ElevarusOS.
+#
+# ─── How to use this spec ───────────────────────────────────────────────────
+#
+# First-time create (via DO UI):
+#   1. DO console → Apps → Create App → "Create via API" link in sidebar
+#   2. Paste the contents of this file
+#   3. DO renders a form pre-filled from the spec
+#   4. Fill in SECRET values (env vars marked `type: SECRET` below)
+#   5. Click Create
+#
+# Update a running app (via doctl):
+#   doctl auth init                                      # one-time
+#   doctl apps list                                      # find your APP_ID
+#   doctl apps update <APP_ID> --spec .do/app.yaml       # apply changes
+#
+# Tail logs:
+#   doctl apps logs <APP_ID> api --follow
+#   doctl apps logs <APP_ID> dashboard --follow
+#
+# ─── Important notes ────────────────────────────────────────────────────────
+#
+# - instance_count is 1 on `api` because cron workers (Ringba sync, Google Ads
+#   sync, Agent Builder digest) use node-cron in-process. Multiple instances
+#   would fire each cron N times. If we ever need horizontal scale, move
+#   cron to a separate `workers:` component.
+#
+# - SECRET-typed env vars are NOT in this file. They're filled in via the DO
+#   dashboard (or `doctl apps update` after editing the spec to include
+#   `value: ...`). This file is git-tracked, so we never put credentials here.
+#
+# - ${APP_URL} is a DO substitution that resolves to the app's public URL
+#   at runtime. Used for ELEVARUS_PUBLIC_URL and the dashboard's API target.
+#
+# - After the first deploy, update Slack and ClickUp webhook URLs to point
+#   at the new domain. See .do/README.md for the post-deploy checklist.
+
+name: elevarus-os
+region: nyc
+
+services:
+  # ─── API + cron workers ────────────────────────────────────────────────────
+  - name: api
+    github:
+      repo: elevarus-admin/ElevarusOS
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    build_command: npm install && npm run build
+    run_command: npm start
+    http_port: 3001
+    instance_count: 1
+    instance_size_slug: basic-xxs   # 512MB / shared vCPU / $5/mo
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 30
+      period_seconds: 30
+      timeout_seconds: 5
+    routes:
+      - path: /api
+      - path: /api-reference
+      - path: /openapi.json
+    envs:
+      # ── Anthropic ─────────────────────────────────────────────────────────
+      - { key: ANTHROPIC_API_KEY,        scope: RUN_TIME, type: SECRET }
+
+      # ── Supabase (server-side) ────────────────────────────────────────────
+      - { key: SUPABASE_URL,             scope: RUN_TIME, type: SECRET }
+      - { key: SUPABASE_SERVICE_KEY,     scope: RUN_TIME, type: SECRET }
+      - { key: SUPABASE_ACCESS_TOKEN,    scope: RUN_TIME, type: SECRET }
+      - { key: SUPABASE_PROJECT_REF,     scope: RUN_TIME, type: SECRET }
+
+      # ── Slack ─────────────────────────────────────────────────────────────
+      - { key: SLACK_BOT_TOKEN,          scope: RUN_TIME, type: SECRET }
+      - { key: SLACK_SIGNING_SECRET,     scope: RUN_TIME, type: SECRET }
+      - { key: SLACK_CLIENT_SECRET,      scope: RUN_TIME, type: SECRET }
+      - { key: SLACK_VERIFICATION_TOKEN, scope: RUN_TIME, type: SECRET }
+      - { key: SLACK_APP_ID,             scope: RUN_TIME }
+      - { key: SLACK_CLIENT_ID,          scope: RUN_TIME }
+      - { key: SLACK_NOTIFY_CHANNEL,     scope: RUN_TIME }
+
+      # ── ClickUp ───────────────────────────────────────────────────────────
+      - { key: CLICKUP_API_TOKEN,        scope: RUN_TIME, type: SECRET }
+      - { key: CLICKUP_WEBHOOK_SECRET,   scope: RUN_TIME, type: SECRET }
+      - { key: CLICKUP_TEAM_ID,          scope: RUN_TIME }
+      - { key: CLICKUP_DEFAULT_LIST_ID,  scope: RUN_TIME }
+      - { key: CLICKUP_LIST_ID,          scope: RUN_TIME }
+
+      # ── Agent Builder ─────────────────────────────────────────────────────
+      - { key: AGENT_BUILDER_CLICKUP_LIST_ID, scope: RUN_TIME }
+      - { key: AGENT_BUILDER_DIGEST_CHANNEL,  scope: RUN_TIME }
+
+      # ── Meta Ads ──────────────────────────────────────────────────────────
+      - { key: META_ACCESS_TOKEN,        scope: RUN_TIME, type: SECRET }
+
+      # ── Google Ads ────────────────────────────────────────────────────────
+      - { key: GOOGLE_ADS_DEVELOPER_TOKEN, scope: RUN_TIME, type: SECRET }
+      - { key: GOOGLE_ADS_CLIENT_ID,       scope: RUN_TIME, type: SECRET }
+      - { key: GOOGLE_ADS_CLIENT_SECRET,   scope: RUN_TIME, type: SECRET }
+      - { key: GOOGLE_ADS_REFRESH_TOKEN,   scope: RUN_TIME, type: SECRET }
+      - { key: GOOGLE_ADS_LOGIN_CUSTOMER_ID, scope: RUN_TIME }
+
+      # ── Ringba ────────────────────────────────────────────────────────────
+      - { key: RINGBA_API_KEY,           scope: RUN_TIME, type: SECRET }
+      - { key: RINGBA_ACCOUNT_ID,        scope: RUN_TIME }
+
+      # ── LeadsProsper ──────────────────────────────────────────────────────
+      - { key: LEADSPROSPER_API_KEY,     scope: RUN_TIME, type: SECRET }
+
+      # ── Everflow ──────────────────────────────────────────────────────────
+      - { key: EVERFLOW_API_KEY,         scope: RUN_TIME, type: SECRET }
+
+      # ── Thumbtack (public CSV — no secret) ────────────────────────────────
+      - { key: THUMBTACK_SHEET_ID,       scope: RUN_TIME }
+      - { key: THUMBTACK_SHEET_TAB,      scope: RUN_TIME }
+
+      # ── Microsoft Graph (Office 365 email intake) ─────────────────────────
+      - { key: MS_TENANT_ID,             scope: RUN_TIME }
+      - { key: MS_CLIENT_ID,             scope: RUN_TIME }
+      - { key: MS_CLIENT_SECRET,         scope: RUN_TIME, type: SECRET }
+      - { key: MS_INTAKE_MAILBOX,        scope: RUN_TIME }
+      - { key: MS_NOTIFY_FROM,           scope: RUN_TIME }
+
+      # ── Mission Control (legacy webhook handshake — likely unused now) ────
+      - { key: MISSION_CONTROL_URL,      scope: RUN_TIME }
+      - { key: MISSION_CONTROL_API_KEY,  scope: RUN_TIME, type: SECRET }
+      - { key: MC_WEBHOOK_SECRET,        scope: RUN_TIME, type: SECRET }
+
+      # ── API auth (must match the dashboard's ELEVARUS_API_SECRET) ─────────
+      # Generate any random 32+ char string. Required so the dashboard's
+      # /api/jobs/:id/approve proxy can call the API with x-api-key.
+      - { key: API_SECRET,               scope: RUN_TIME, type: SECRET }
+
+      # ── Public URL (used by ClickUp webhook registration etc.) ────────────
+      - key: ELEVARUS_PUBLIC_URL
+        scope: RUN_TIME
+        value: ${APP_URL}
+
+      # ── CORS — allow the dashboard origin (same app, but explicit) ────────
+      - key: CORS_ORIGINS
+        scope: RUN_TIME
+        value: ${APP_URL}
+
+      # ── Orchestrator settings (defaults baked in here) ────────────────────
+      - { key: NODE_ENV,            scope: RUN_TIME, value: production }
+      - { key: JOB_STORE,           scope: RUN_TIME, value: supabase }
+      - { key: LOG_LEVEL,           scope: RUN_TIME, value: info }
+      - { key: MAX_STAGE_RETRIES,   scope: RUN_TIME, value: "2" }
+      - { key: POLL_INTERVAL_MS,    scope: RUN_TIME, value: "60000" }
+
+  # ─── Dashboard (Next.js) ───────────────────────────────────────────────────
+  - name: dashboard
+    github:
+      repo: elevarus-admin/ElevarusOS
+      branch: main
+      deploy_on_push: true
+    source_dir: /dashboard
+    build_command: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    run_command: pnpm start
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: basic-xs   # 1GB / shared vCPU / $12/mo (Next.js build needs >512MB)
+    health_check:
+      http_path: /login
+      initial_delay_seconds: 30
+      period_seconds: 30
+      timeout_seconds: 5
+    routes:
+      - path: /
+    envs:
+      # NEXT_PUBLIC_* must be RUN_AND_BUILD_TIME — Next.js bakes them into
+      # the client bundle at build time.
+      - { key: NEXT_PUBLIC_SUPABASE_URL,      scope: RUN_AND_BUILD_TIME, type: SECRET }
+      - { key: NEXT_PUBLIC_SUPABASE_ANON_KEY, scope: RUN_AND_BUILD_TIME, type: SECRET }
+
+      # Dashboard talks to the API via the same App URL (DO routes /api/* to
+      # the api service). Set at build time so Next.js can prerender against it.
+      - key: NEXT_PUBLIC_ELEVARUS_API_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${APP_URL}
+
+      # Server-side: service role key for SSR routes that bypass RLS
+      - { key: SUPABASE_SERVICE_KEY,    scope: RUN_TIME, type: SECRET }
+
+      # Server-to-server proxy auth — must match the api service's API_SECRET
+      - { key: ELEVARUS_API_SECRET,     scope: RUN_TIME, type: SECRET }
