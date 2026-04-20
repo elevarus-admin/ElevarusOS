@@ -45,6 +45,70 @@ export interface MetaSpendOptions {
 }
 
 /**
+ * Level of granularity for an Insights query. Follows Meta's Graph API enum.
+ *   - account  — one row per ad account (what get_meta_spend returns)
+ *   - campaign — one row per campaign
+ *   - adset    — one row per ad set (within campaign)
+ *   - ad       — one row per ad (within ad set)
+ */
+export type MetaInsightLevel = "account" | "campaign" | "adset" | "ad";
+
+/**
+ * Options for MetaAdsClient.queryInsights(). Superset of MetaSpendOptions —
+ * supports level, breakdowns, custom field lists, and filtering.
+ */
+export interface MetaQueryOptions {
+  adAccountId:  string;
+  /** YYYY-MM-DD. PT-anchored by convention. */
+  startDate:    string;
+  endDate:      string;
+  level?:       MetaInsightLevel;   // default 'campaign'
+  /**
+   * Explicit field list. When omitted, a sensible default for the level is
+   * used (see src/integrations/meta/client.ts → defaultFieldsForLevel).
+   * Identity fields (campaign_id/_name, adset_id/_name, ad_id/_name) are
+   * always added for level>=campaign.
+   */
+  fields?:      string[];
+  /** Optional breakdown dimensions (e.g. ['age','gender'], ['publisher_platform']). */
+  breakdowns?:  string[];
+  /** Optional campaign_id filter (applied server-side via filtering param). */
+  campaignIds?: string[];
+  /** Optional ad_id filter (applied server-side). */
+  adIds?:       string[];
+  /** Max rows to return after pagination. */
+  limit?:       number;
+}
+
+/**
+ * One row of a MetaQuery result. Identity + metric fields vary by level,
+ * so the shape is mostly loose — Claude reads what's there. The numeric
+ * fields are always coerced to number (Meta returns strings).
+ */
+export interface MetaQueryRow {
+  level:        MetaInsightLevel;
+  date_start:   string;
+  date_stop:    string;
+  account_id?:  string;
+  campaign_id?: string;
+  campaign_name?: string;
+  adset_id?:    string;
+  adset_name?:  string;
+  ad_id?:       string;
+  ad_name?:     string;
+  spend?:       number;
+  impressions?: number;
+  clicks?:      number;
+  reach?:       number;
+  frequency?:   number;
+  ctr?:         number;
+  cpc?:         number;
+  cpm?:         number;
+  /** Any non-enumerated fields (breakdowns, actions, etc.) come through here verbatim. */
+  extras?:      Record<string, unknown>;
+}
+
+/**
  * Summary row from /me/adaccounts. Each entry is one ad account the
  * configured System User token has been granted access to. Use to discover
  * accounts before configuring an instance.

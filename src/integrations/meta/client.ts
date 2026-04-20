@@ -1,5 +1,12 @@
 import { logger } from "../../core/logger";
-import type { MetaInsightRecord, MetaSpendOptions, MetaAdAccountSummary } from "./types";
+import type {
+  MetaInsightRecord,
+  MetaSpendOptions,
+  MetaAdAccountSummary,
+  MetaQueryOptions,
+  MetaQueryRow,
+  MetaInsightLevel,
+} from "./types";
 
 /** Meta's numeric `account_status` → human label. */
 const ACCOUNT_STATUS_LABELS: Record<number, string> = {
@@ -158,6 +165,68 @@ export class MetaAdsClient {
     return all;
   }
 
+  /**
+   * Per-campaign / per-ad-set / per-ad insights for a date range.
+   *
+   * This is the flexible counterpart to `fetchInsights`: supports all four
+   * Meta levels (account | campaign | adset | ad), custom field lists,
+   * breakdowns, and server-side campaign/ad filtering. Use for
+   * "which ad has the best CPC" style questions that need a breakout
+   * rather than an account total.
+   *
+   * Pagination handled internally via `paging.next`. Hard row ceiling is
+   * the caller's `limit` (default 100). For most accounts, a single page
+   * (500 rows) suffices for any level=campaign|adset date range.
+   */
+  async queryInsights(opts: MetaQueryOptions): Promise<MetaQueryRow[]> {
+    if (!this.enabled) return [];
+
+    const level  = opts.level ?? "campaign";
+    const fields = resolveFields(level, opts.fields);
+    const limit  = Math.min(opts.limit ?? 100, 500);
+
+    const params = new URLSearchParams({
+      fields:       fields.join(","),
+      level,
+      time_range:   JSON.stringify({ since: opts.startDate, until: opts.endDate }),
+      access_token: this.accessToken,
+      limit:        String(limit),
+    });
+    if (opts.breakdowns && opts.breakdowns.length > 0) {
+      params.set("breakdowns", opts.breakdowns.join(","));
+    }
+    // Server-side filtering — Meta expects JSON-encoded filtering array
+    const filters: Array<{ field: string; operator: string; value: string[] }> = [];
+    if (opts.campaignIds && opts.campaignIds.length > 0) {
+      filters.push({ field: "campaign.id", operator: "IN", value: opts.campaignIds });
+    }
+    if (opts.adIds && opts.adIds.length > 0) {
+      filters.push({ field: "ad.id", operator: "IN", value: opts.adIds });
+    }
+    if (filters.length > 0) {
+      params.set("filtering", JSON.stringify(filters));
+    }
+
+    const url = `${GRAPH_BASE}/act_${opts.adAccountId}/insights`;
+    const all: MetaQueryRow[] = [];
+    let nextUrl: string | null = `${url}?${params.toString()}`;
+
+    while (nextUrl && all.length < limit) {
+      const data = await this.getUrl(nextUrl);
+      if (!data) break;
+      const rows: any[] = data.data ?? [];
+
+      for (const r of rows) {
+        if (all.length >= limit) break;
+        all.push(normalizeRow(r, level));
+      }
+
+      nextUrl = data.paging?.next ?? null;
+    }
+
+    return all;
+  }
+
   // ── HTTP helpers ──────────────────────────────────────────────────────────
 
   private async getUrl(url: string): Promise<any | null> {
@@ -180,4 +249,78 @@ export class MetaAdsClient {
       return null;
     }
   }
+}
+
+// ─── Helpers for queryInsights ───────────────────────────────────────────────
+
+/** Default field list per level. Identity fields are always included. */
+function defaultFieldsForLevel(level: MetaInsightLevel): string[] {
+  const core = ["spend", "impressions", "clicks", "reach", "frequency", "ctr", "cpc", "cpm"];
+  if (level === "account")  return [...core];
+  if (level === "campaign") return [...core, "campaign_id", "campaign_name"];
+  if (level === "adset")    return [...core, "campaign_id", "campaign_name", "adset_id", "adset_name"];
+  return [...core, "campaign_id", "campaign_name", "adset_id", "adset_name", "ad_id", "ad_name"];
+}
+
+/** Caller fields + the identity fields needed to interpret the row. */
+function resolveFields(level: MetaInsightLevel, caller?: string[]): string[] {
+  const defaults = defaultFieldsForLevel(level);
+  if (!caller || caller.length === 0) return defaults;
+  const required: string[] = [];
+  if (level === "campaign" || level === "adset" || level === "ad") {
+    required.push("campaign_id", "campaign_name");
+  }
+  if (level === "adset" || level === "ad") {
+    required.push("adset_id", "adset_name");
+  }
+  if (level === "ad") {
+    required.push("ad_id", "ad_name");
+  }
+  return [...new Set([...required, ...caller])];
+}
+
+/** Coerce Meta's stringy numerics and split known identity fields off `extras`. */
+function normalizeRow(r: any, level: MetaInsightLevel): MetaQueryRow {
+  const asNum = (v: unknown): number | undefined => {
+    if (v === undefined || v === null || v === "") return undefined;
+    const n = parseFloat(String(v));
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const asInt = (v: unknown): number | undefined => {
+    if (v === undefined || v === null || v === "") return undefined;
+    const n = parseInt(String(v), 10);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const known = new Set([
+    "date_start", "date_stop", "account_id",
+    "campaign_id", "campaign_name", "adset_id", "adset_name", "ad_id", "ad_name",
+    "spend", "impressions", "clicks", "reach", "frequency", "ctr", "cpc", "cpm",
+  ]);
+  const extras: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (!known.has(k)) extras[k] = v;
+  }
+
+  return {
+    level,
+    date_start:     String(r.date_start ?? ""),
+    date_stop:      String(r.date_stop  ?? ""),
+    account_id:     r.account_id      ? String(r.account_id)      : undefined,
+    campaign_id:    r.campaign_id     ? String(r.campaign_id)     : undefined,
+    campaign_name:  r.campaign_name   ? String(r.campaign_name)   : undefined,
+    adset_id:       r.adset_id        ? String(r.adset_id)        : undefined,
+    adset_name:     r.adset_name      ? String(r.adset_name)      : undefined,
+    ad_id:          r.ad_id           ? String(r.ad_id)           : undefined,
+    ad_name:        r.ad_name         ? String(r.ad_name)         : undefined,
+    spend:          asNum(r.spend),
+    impressions:    asInt(r.impressions),
+    clicks:         asInt(r.clicks),
+    reach:          asInt(r.reach),
+    frequency:      asNum(r.frequency),
+    ctr:            asNum(r.ctr),
+    cpc:            asNum(r.cpc),
+    cpm:            asNum(r.cpm),
+    extras:         Object.keys(extras).length > 0 ? extras : undefined,
+  };
 }
