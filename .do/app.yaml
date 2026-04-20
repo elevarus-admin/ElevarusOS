@@ -56,10 +56,16 @@ region: nyc
 # default ingress hostname (run `doctl apps get <APP_ID> --output json |
 # jq '.[0].default_ingress'` to fetch). DO provisions a Let's Encrypt cert
 # automatically once DNS resolves.
+#
+# type: ALIAS (NOT PRIMARY) — required when the domain is hosted on an
+# external DNS provider (GoDaddy here). PRIMARY would require the
+# elevarus.com nameservers to be delegated to DigitalOcean (ns1/2/3.
+# digitalocean.com). ALIAS lets DO issue the cert + route traffic without
+# owning the DNS zone — the default *.ondigitalocean.app URL stays as
+# the technical "primary" but os.elevarus.com works as an alias.
 domains:
   - domain: os.elevarus.com
-    type: PRIMARY
-    zone: elevarus.com
+    type: ALIAS
 
 services:
   # ─── API + cron workers ────────────────────────────────────────────────────
