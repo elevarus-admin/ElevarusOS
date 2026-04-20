@@ -1,0 +1,388 @@
+{
+  "teamId": "9016020445",
+  "spaces": [
+    {
+      "id": "90160044258",
+      "name": "Elevarus Clients"
+    },
+    {
+      "id": "90160064252",
+      "name": "Elevarus"
+    },
+    {
+      "id": "90161088470",
+      "name": "Client Archive"
+    },
+    {
+      "id": "90161586245",
+      "name": "Clients Requests"
+    },
+    {
+      "id": "90163987561",
+      "name": "Elevarus PPCL"
+    },
+    {
+      "id": "90166177459",
+      "name": "O&O"
+    }
+  ],
+  "lists": [
+    {
+      "id": "901600173268",
+      "name": "Ameriside / Ameriside - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901603840958",
+      "name": "Ameriside / Marina Construction - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901600173272",
+      "name": "Apposite Technologies / Apposite Technologies - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901606076859",
+      "name": "Dark Horse Motorcars / Dark Horse Motorcars - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901608260424",
+      "name": "Flinsco / Flinsco - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901610057147",
+      "name": "Intellivo / Intellivo - New Features",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901610057166",
+      "name": "Intellivo / Intellivo - Bug Tracker ",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901609174914",
+      "name": "Let's Grow / Let's Grow - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901600173293",
+      "name": "National Equipment / National Equipment - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901604520875",
+      "name": "Orion Metals / Orion Metal - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901600173282",
+      "name": "Robar Enterprises / Endura Steel - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901602950189",
+      "name": "Robar Enterprises / Hi-Grade Materials - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901609171876",
+      "name": "Robar Enterprises / Smith Ironworks - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901606037436",
+      "name": "Stonegate Firm / Stonegate Firm - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901601749792",
+      "name": "Thor Metals Group / TMG - List",
+      "spaceId": "90160044258"
+    },
+    {
+      "id": "901612113489",
+      "name": "Projects / Elevarus External Projects",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901600225519",
+      "name": "Projects / Elevarus Internal Projects",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901608030238",
+      "name": "Projects / Content Calendar",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901607984808",
+      "name": "Projects / Access & Ownership Transfer/Tracking",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901608795424",
+      "name": "Reporting / List",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901608051684",
+      "name": "SOPs / SOP Video Notes",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901607594819",
+      "name": "Templates / ClientName - List",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901609699171",
+      "name": "Doc Archive / List",
+      "spaceId": "90160064252"
+    },
+    {
+      "id": "901607494672",
+      "name": "C2G Joint Venture for Medicare - List",
+      "spaceId": "90161088470"
+    },
+    {
+      "id": "901606287808",
+      "name": "American Independence Gold / American Independence Gold - List",
+      "spaceId": "90161088470"
+    },
+    {
+      "id": "901605862570",
+      "name": "Affiliates / Affiliates - List",
+      "spaceId": "90161088470"
+    },
+    {
+      "id": "901607203931",
+      "name": "BeneHub / Benehub - List",
+      "spaceId": "90161088470"
+    },
+    {
+      "id": "901603781355",
+      "name": "MySolarfy / MySolarfy - List",
+      "spaceId": "90161088470"
+    },
+    {
+      "id": "901602756149",
+      "name": "Network Capital / Network Capital",
+      "spaceId": "90161088470"
+    },
+    {
+      "id": "901603442367",
+      "name": "Email Support Requests",
+      "spaceId": "90161586245"
+    },
+    {
+      "id": "901603443271",
+      "name": "📋 Form",
+      "spaceId": "90161586245"
+    },
+    {
+      "id": "901613647231",
+      "name": "Call Buyer Target Details",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901613411434",
+      "name": "PPCL Accounts",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901607594329",
+      "name": "PPCL Projects",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901613410662",
+      "name": "Form",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901613892713",
+      "name": "Lead Buyer Camp Details",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901608448390",
+      "name": "PPCL Partners (LEGACY)",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901614538813",
+      "name": "Main Projects / List",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901614538815",
+      "name": "Internal Projects/Meetings / List",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901614538819",
+      "name": "Forms / List",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901614538828",
+      "name": "Forms / Call Buyer Target Details (COPY-TEST)",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901614538846",
+      "name": "Forms / Lead Buyer Camp Details (COPY-TEST)",
+      "spaceId": "90163987561"
+    },
+    {
+      "id": "901600712579",
+      "name": "Claro Insurance / Claro Insurance - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901613166283",
+      "name": "Claro Insurance / Claro Insurance INVOICING",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901607494661",
+      "name": "Claro Insurance / Neil Schwabe Joint Venture Private Health - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901601402449",
+      "name": "Covered Health Plans / Covered Health Plans - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901613759520",
+      "name": "Stress Free Health Options / SFHO - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901607913600",
+      "name": "O&O - Verticals / HVAC - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901606376193",
+      "name": "O&O - Verticals / Tree Top Financial - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901609914398",
+      "name": "O&O - Verticals / Final Expense - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901606376198",
+      "name": "O&O - Verticals / Solarfy - List",
+      "spaceId": "90166177459"
+    },
+    {
+      "id": "901609174554",
+      "name": "SaveOnMyQuote.com / SaveOnMyQuote.com - List",
+      "spaceId": "90166177459"
+    }
+  ],
+  "members": [
+    {
+      "id": "1358309",
+      "username": "clevemcmillan@gmail",
+      "email": "clevemcmillan@gmail.com"
+    },
+    {
+      "id": "100955871",
+      "username": "Ankit N",
+      "email": "ankit@elevarus.com"
+    },
+    {
+      "id": "100951948",
+      "username": "michael",
+      "email": "michael@clarohealthinsurance.com"
+    },
+    {
+      "id": "57244330",
+      "username": "Cyndi Dinh",
+      "email": "cyndi.dinh@gmail.com"
+    },
+    {
+      "id": "106151995",
+      "username": "Abdul Nasir",
+      "email": "nasir@growthguild.us"
+    },
+    {
+      "id": "100898066",
+      "username": "Jermaine Humes",
+      "email": "jermaine@elevarus.com"
+    },
+    {
+      "id": "100856737",
+      "username": "Pamela Gomez",
+      "email": "pamela@elevarus.com"
+    },
+    {
+      "id": "93932028",
+      "username": "David Femi Oladipupo",
+      "email": "oladipupodavidfemi@gmail.com"
+    },
+    {
+      "id": "194539391",
+      "username": "Farooq Khan",
+      "email": "farooq@elevarus.com"
+    },
+    {
+      "id": "82411162",
+      "username": "Trish Mahon",
+      "email": "omgusainc@gmail.com"
+    },
+    {
+      "id": "94907856",
+      "username": "Rey Ian Talandrata",
+      "email": "rey@elevarus.com"
+    },
+    {
+      "id": "94904046",
+      "username": "Adam MacLennan",
+      "email": "adam@elevarus.com"
+    },
+    {
+      "id": "94900071",
+      "username": "Favio De Iraola",
+      "email": "favio@elevarus.com"
+    },
+    {
+      "id": "88831968",
+      "username": "Ethan Jenkin",
+      "email": "ethan@elevarus.com"
+    },
+    {
+      "id": "88948540",
+      "username": "Leonardo Cossio",
+      "email": "leonardo.cossio@lecossdesign.com"
+    },
+    {
+      "id": "88878253",
+      "username": "Dan",
+      "email": "dan@vepoly.com"
+    },
+    {
+      "id": "60032075",
+      "username": "Shane McIntyre",
+      "email": "shane@tdmarketingsolutions.com"
+    },
+    {
+      "id": "88806441",
+      "username": "Sunni Sukumar",
+      "email": "sunni@elevarus.com"
+    },
+    {
+      "id": "44298901",
+      "username": "Lumen Tran",
+      "email": "lumen@elevarus.com"
+    }
+  ]
+}

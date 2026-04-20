@@ -4,6 +4,7 @@ dist/
 data/*
 # Except config/annotation files shipped with the code
 !data/schema-annotations.json
+!data/clickup-spaces.json
 
 # Dashboard runtime files (dashboard/ is part of this monorepo since 2026-04-20;
 # previously a submodule of builderz-labs/mission-control — see dashboard/README.md)
