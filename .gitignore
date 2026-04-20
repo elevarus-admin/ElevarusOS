@@ -5,11 +5,14 @@ data/*
 # Except config/annotation files shipped with the code
 !data/schema-annotations.json
 
-# Dashboard submodule runtime files (not tracked in ElevarusOS repo)
+# Dashboard runtime files (dashboard/ is part of this monorepo since 2026-04-20;
+# previously a submodule of builderz-labs/mission-control — see dashboard/README.md)
 dashboard/.env
+dashboard/.env.local
 dashboard/.data/
 dashboard/.next/
 dashboard/node_modules/
+dashboard/tsconfig.tsbuildinfo
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
