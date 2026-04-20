@@ -52,6 +52,15 @@
 name: elevarus-os
 region: nyc
 
+# Custom domain. CNAME `os.elevarus.com` to the app's *.ondigitalocean.app
+# default ingress hostname (run `doctl apps get <APP_ID> --output json |
+# jq '.[0].default_ingress'` to fetch). DO provisions a Let's Encrypt cert
+# automatically once DNS resolves.
+domains:
+  - domain: os.elevarus.com
+    type: PRIMARY
+    zone: elevarus.com
+
 services:
   # ─── API + cron workers ────────────────────────────────────────────────────
   - name: api
@@ -71,9 +80,16 @@ services:
       period_seconds: 30
       timeout_seconds: 5
     routes:
+      # preserve_path_prefix:true keeps `/api/...` intact when forwarding to
+      # the service. Without this DO strips the matched prefix, so a request
+      # for /api/health would arrive at Express as /health and miss the
+      # `r.get("/api/health", ...)` registration → 404. Health checks fail.
       - path: /api
+        preserve_path_prefix: true
       - path: /api-reference
+        preserve_path_prefix: true
       - path: /openapi.json
+        preserve_path_prefix: true
     envs:
       # ── Anthropic ─────────────────────────────────────────────────────────
       - { key: ANTHROPIC_API_KEY,        scope: RUN_TIME, type: SECRET }
