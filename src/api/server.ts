@@ -151,6 +151,13 @@ export class ApiServer {
     //   openapi.json     — public spec
     //   api-reference    — public Scalar HTML viewer
     const p = req.path;
+    // Job actions: approve / reject / cancel. These were originally proxied
+    // by dashboard Next.js route handlers (which would inject x-api-key
+    // server-side), but in prod DO routes /api/* directly to this api
+    // service, bypassing those handlers. Auth is provided by knowing the
+    // jobId UUID (you can't act on a job without first looking it up).
+    const isJobAction = /^\/api\/jobs\/[^/]+\/(approve|reject|cancel)$/.test(p);
+
     if (
       p === "/api/health"          || p === "/health"          ||
       p === "/api/openapi.json"    || p === "/openapi.json"    ||
@@ -161,7 +168,8 @@ export class ApiServer {
       // browser-side fetch can't carry x-api-key and proxying through
       // Next.js routes doesn't work in prod (DO routes /api/* to the api
       // service, not to dashboard-side route handlers).
-      p.startsWith("/api/agent-builder")   || p.startsWith("/agent-builder")
+      p.startsWith("/api/agent-builder")   || p.startsWith("/agent-builder")  ||
+      isJobAction
     ) { next(); return; }
 
     const secret = process.env.API_SECRET;

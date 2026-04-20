@@ -6,10 +6,10 @@ import { cn } from '@/lib/utils';
 import { UserNav } from './user-nav';
 
 const NAV_ITEMS = [
+  { href: '/agents',        label: 'Agents',         icon: Bot },
   { href: '/active',        label: 'Active Jobs',    icon: Activity },
   { href: '/scheduled',     label: 'Scheduled',      icon: Calendar },
   { href: '/history',       label: 'Job History',    icon: Clock },
-  { href: '/agents',        label: 'Agents',         icon: Bot },
   { href: '/workflows',     label: 'Workflows',      icon: GitBranch },
   { href: '/tokens',        label: 'Token Usage',    icon: BarChart2 },
   { href: '/integrations',  label: 'Integrations',   icon: Plug },
