@@ -13,9 +13,7 @@ Last confirmed working: 2026-04-21 (data-collection rewired to read Thumbtack fr
 Working sources:
 - **Meta Ads** — account `24568971736103024` verified visible to System User token
 - **Thumbtack** — reads `thumbtack_daily_sessions` (source='hvac'), populated nightly by the `hvac-thumbtack-import` agent
-
-Pending sources:
-- **Ringba** — code path wired; awaiting the exact HVAC campaign name to uncomment the `ringba:` block in `instance.md`.
+- **Ringba** — campaign `O&O_HVAC_SAVEONMYQUOTE.COM` (Yesterday uses `minCallDurationSeconds=30`; MTD uses `0`)
 
 ---
 
@@ -45,3 +43,4 @@ Plain mrkdwn, 3 lines (header + Yesterday + MTD) posted directly — no Block Ki
 |------|--------|
 | 2026-04-19 | Agent recreated post-MC-removal. Meta wired; Thumbtack revenue blocked on import-agent design. |
 | 2026-04-21 | Data-collection rewritten: pulls Thumbtack (Supabase) + Ringba + Meta in parallel for Yesterday + MTD; combined revenue model. Slack-publish switched to plain mrkdwn (no Block Kit) to match FE condensed format. Analysis stage reshaped to emit yesterday/mtd periods. |
+| 2026-04-21 | Ringba campaign set to `O&O_HVAC_SAVEONMYQUOTE.COM` — Ringba revenue now included in the combined revenue line. |

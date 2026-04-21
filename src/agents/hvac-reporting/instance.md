@@ -22,13 +22,10 @@ notify:
 #    reads directly from that table for the yesterday + MTD windows.
 #
 # 2) Ringba — call revenue for the HVAC campaign. The data-collection stage
-#    calls `getCampaignRevenue` with the name below. Leave the ringba block
-#    commented out to disable Ringba revenue; uncomment and set the exact
-#    campaign name to enable it.
-#
-# ringba:
-#   campaignName: <EXACT HVAC Ringba campaign name>
-#   reportPeriod: mtd
+#    calls `getCampaignRevenue` with the name below.
+ringba:
+  campaignName: O&O_HVAC_SAVEONMYQUOTE.COM
+  reportPeriod: mtd
 
 # EXPENSES — single Meta ad account
 meta:
