@@ -22,8 +22,9 @@ This file is your primary instruction source. The analysis stage and summary sta
 |--------|------|-------------|--------|
 | **Meta Ads** | expense | spend, CPC, CTR (Yesterday + MTD) | active |
 | **Thumbtack** | revenue | sessions count, sum of `owed_revenue` (Yesterday + MTD) | active — populated daily by `hvac-thumbtack-import`, reads from Supabase `thumbtack_daily_sessions` |
+| **Ringba** | revenue | HVAC campaign calls + `totalRevenue` (Yesterday + MTD) | active when `ringba.campaignName` is set in `instance.md` |
 
-If either source returns null for the current window, report `data unavailable` for that line — never fabricate or zero-fill.
+**Combined revenue** for a window = Thumbtack `owed_revenue` + Ringba `totalRevenue`. If both sources return null for the window, report `data unavailable` for that line — never fabricate or zero-fill. If only one of the two is missing, its contribution is treated as `$0` and the run continues with the available data.
 
 **Date windows:** Because the Thumbtack sheet updates overnight, the primary comparison is *Yesterday* (final numbers), not *Today* (partial / empty). MTD runs from the 1st of the current month through yesterday (PT).
 
@@ -34,7 +35,8 @@ If either source returns null for the current window, report `data unavailable` 
 | Metric | Definition |
 |--------|-----------|
 | `sessions` | Total Thumbtack sessions for the period |
-| `revenue` | Sum of Thumbtack `owed revenue` column |
+| `revenue` | Thumbtack `owed_revenue` + Ringba `totalRevenue` (combined) |
+| `ringbaCalls` | Ringba total calls for the HVAC campaign (surface in markdown report; optional in Slack line) |
 | `metaSpend` | Total Meta ad spend |
 | `cpc` / `ctr` | Meta cost-per-click and click-through rate |
 | `costPerSession` | `metaSpend / sessions` — when sessions are available |
@@ -66,7 +68,7 @@ The `slackMessage` field's format is **not defined here** — it is injected by 
 
 The output is a 3-line compact report (header · Yesterday line · MTD line). See the shared module for the full spec and example.
 
-If Thumbtack revenue is stale for the window (sheet not yet updated), emit `📊 data unavailable · 💸 $<spend>` for that line and set `alertLevel: yellow`.
+If BOTH revenue sources (Thumbtack and Ringba) are unavailable for the window, emit `📊 data unavailable · 💸 $<spend>` for that line and set `alertLevel: yellow`. If only one of the two is missing but the other has data, include the combined revenue in the line and note the missing source in the markdown report.
 
 The `markdownReport` field — which is saved to the workspace — remains unconstrained by the compact format and can carry full bullet breakdowns, CPC, cost-per-session, margin, trends, etc.
 

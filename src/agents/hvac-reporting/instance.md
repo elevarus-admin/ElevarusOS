@@ -12,20 +12,23 @@ brand:
 
 notify:
   approver: ~
-  slackChannel: cli-hvac     # TODO: confirm or rename — Shane to specify
+  slackChannel: cli-hvac
 
-# REVENUE — Thumbtack (NOT Ringba)
-# HVAC revenue comes from a shared Thumbtack report ("daily sessions" tab,
-# sum of "owed revenue" column, sheet updated daily). The proposed
-# `hvac-thumbtack-report-import` agent will ingest that sheet into Supabase
-# and this agent will read from there. Open question: what's the share
-# format? (Google Sheet? CSV email? Thumbtack API?) — once known, build
-# the import agent and add a `thumbtack:` block here.
+# REVENUE — combined from two sources
 #
-# thumbtack:
-#   sheetId: <Google Sheet ID once known>
-#   tabName: "daily sessions"
-#   revenueColumn: "owed revenue"
+# 1) Thumbtack — sessions + owed_revenue from the shared "daily sessions" sheet,
+#    imported nightly by the `hvac-thumbtack-import` agent into the Supabase
+#    table `thumbtack_daily_sessions` (source='hvac'). The data-collection stage
+#    reads directly from that table for the yesterday + MTD windows.
+#
+# 2) Ringba — call revenue for the HVAC campaign. The data-collection stage
+#    calls `getCampaignRevenue` with the name below. Leave the ringba block
+#    commented out to disable Ringba revenue; uncomment and set the exact
+#    campaign name to enable it.
+#
+# ringba:
+#   campaignName: <EXACT HVAC Ringba campaign name>
+#   reportPeriod: mtd
 
 # EXPENSES — single Meta ad account
 meta:
@@ -44,25 +47,34 @@ campaign:
   metrics:
     - Sessions (Thumbtack)
     - Owed revenue (Thumbtack daily sessions)
+    - Ringba campaign revenue (when configured)
     - Meta ad spend
     - P&L and ROI
-    - Top performing ad sets
 ---
 
 # HVAC Campaign Report Bot
 
-Produces performance summaries for the HVAC lead-generation campaign.
+Produces daily P&L summaries for the HVAC lead-generation campaign.
 
 ## Cost basis
 
-P&L for HVAC is simpler than U65: one ad account on Meta, revenue from a single Thumbtack report.
+Single Meta ad account funds the campaign. Revenue comes from two sources
+(Thumbtack sessions + Ringba calls); P&L = (Thumbtack owed + Ringba revenue) − Meta spend.
 
-## Revenue source
+## Revenue sources
 
-Thumbtack does not (yet) feed via API. The current data source is a **shared report** updated daily — "daily sessions" tab, sum of the "owed revenue" column.
+- **Thumbtack** — read from Supabase `thumbtack_daily_sessions` (populated nightly
+  by the `hvac-thumbtack-import` agent). Column `owed_revenue` summed across the
+  window. This is the bulk of HVAC revenue.
+- **Ringba** — configured via the `ringba.campaignName` frontmatter block above.
+  Adds call-driven revenue for the same campaign. Optional: if the block is
+  omitted, the report runs Thumbtack-only.
 
-Until the `hvac-thumbtack-report-import` agent is built, this workflow's revenue numbers will be missing. The data-collection stage should report `revenue: data unavailable` rather than zero-fill.
+If either source is unavailable for the window, the missing source contributes
+`$0` and the run continues with whatever data is present. The data-collection
+stage never zero-fills the *combined* revenue — if both sources fail, the
+Slack line emits `📊 data unavailable`.
 
 ## Slack channel
 
-Reports post to `#cli-hvac` (subject to confirmation — placeholder).
+Reports post to `#cli-hvac`.

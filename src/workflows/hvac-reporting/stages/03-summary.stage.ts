@@ -5,7 +5,10 @@ import { Job } from "../../../models/job.model";
 import { claudeJSON } from "../../../core/claude-client";
 import { logger } from "../../../core/logger";
 import { AnalysisOutput } from "./02-analysis.stage";
-import { buildCompactSlackFormatSpec } from "../../_shared/compact-slack-format";
+import {
+  buildCompactSlackFormatSpec,
+  alertEmojiFor,
+} from "../../_shared/compact-slack-format";
 
 export interface SummaryOutput {
   slackMessage:   string;
@@ -52,6 +55,8 @@ export class SummaryStage implements IStage {
       `Return only valid JSON — no markdown fences, no explanation.`,
     ].filter(Boolean).join("\n");
 
+    const alertEmoji = alertEmojiFor(analysis.alertLevel);
+
     const userPrompt = [
       `Produce the final report for: ${job.request.title}`,
       ``,
@@ -62,20 +67,20 @@ export class SummaryStage implements IStage {
       // HVAC uses a session-driven volume token (Thumbtack sessions, not calls),
       // and "Yesterday" as the primary period since the Thumbtack sheet updates
       // overnight — today's row isn't present until tomorrow's run.
-      // alertEmoji omitted → Claude substitutes based on the alertLevel it picks.
       buildCompactSlackFormatSpec({
         shortName:    "HVAC",
+        alertEmoji,
         volumeToken:  "📊 <N> sessions",
         periodLabels: ["Yesterday", "MTD <Mon D–D>"],
       }),
       ``,
       `Return this exact JSON — no markdown fences:`,
       JSON.stringify({
-        slackMessage:   "<Slack message following the exact format above, with <emoji> substituted to match alertLevel>",
+        slackMessage:   "<Slack message following the exact format above>",
         markdownReport: "<Full Markdown report with ## headings and metric tables for the agent workspace.>",
         subject:        "<e.g. 'HVAC Report — Apr 19 | MTD: ($8,216)'>",
         oneLiner:       "<One sentence MTD summary with the most important numbers>",
-        alertLevel:     "green | yellow | red",
+        alertLevel:     analysis.alertLevel,
       }, null, 2),
     ].join("\n");
 

@@ -3,7 +3,7 @@ import * as path from "path";
 import { IStage, requireStageOutput } from "../../../core/stage.interface";
 import { Job } from "../../../models/job.model";
 import { loadInstanceConfig } from "../../../core/instance-config";
-import { postToSlack, buildReportBlocks } from "../../../adapters/slack/client";
+import { postToSlack } from "../../../adapters/slack/client";
 import { logger } from "../../../core/logger";
 import { SummaryOutput } from "./03-summary.stage";
 
@@ -16,22 +16,15 @@ export interface SlackPublishOutput {
 }
 
 /**
- * Stage 4 — Slack Publish
+ * Stage 4 — Slack Publish (HVAC)
  *
- * Posts the campaign summary to the Slack channel configured for this instance.
+ * Posts the compact 3-line report to the instance's Slack channel as plain
+ * mrkdwn — no Block Kit wrapper, no header, no divider, no oneLiner section.
+ * The compact format (built by the summary stage via compact-slack-format) is
+ * already self-contained with alert emoji + header + two period lines.
  *
- * Configuration (instance.md):
- *   notify:
- *     slackChannel: cli-final-expense   ← channel name or ID
- *
- * Env vars required:
- *   SLACK_BOT_TOKEN=xoxb-...
- *
- * The bot must be invited to the channel:
- *   /invite @YourBotName   (in Slack)
- *
- * If slackChannel is not set or SLACK_BOT_TOKEN is missing, the stage
- * completes successfully but logs a warning and skips the post.
+ * Env vars: SLACK_BOT_TOKEN=xoxb-...
+ * Dry run:  DRY_RUN=true prints to stdout instead of Slack.
  */
 export class SlackPublishStage implements IStage {
   readonly stageName = "slack-publish";
@@ -41,25 +34,30 @@ export class SlackPublishStage implements IStage {
 
     const summary = requireStageOutput<SummaryOutput>(job, "summary");
 
-    // Resolve the target Slack channel and agent name from the instance config
+    // Resolve the target Slack channel from instance config
     let slackChannel: string | undefined;
-    let agentName    = job.workflowType;
-    let reportPeriod = "MTD";
     try {
-      const cfg    = loadInstanceConfig(job.workflowType);
+      const cfg = loadInstanceConfig(job.workflowType);
       slackChannel = cfg.notify.slackChannel;
-      if (cfg.name) agentName = cfg.name;
-      const period = cfg.ringba?.reportPeriod ?? "mtd";
-      const periodLabels: Record<string, string> = {
-        mtd: `${new Date().toLocaleString("en-US", { month: "long" })} MTD`,
-        wtd: "Week to Date",
-        ytd: "Year to Date",
-      };
-      reportPeriod = periodLabels[period] ?? period.toUpperCase();
     } catch { /* instance config optional */ }
 
-    // Title: "<Agent Name> — <Report Period>"
-    const reportTitle = `${agentName} — ${reportPeriod}`;
+    if (process.env.DRY_RUN === "true") {
+      logger.info("slack-publish: DRY RUN — skipping Slack post");
+      const publishedAt = new Date().toISOString();
+      console.log("\n" + "═".repeat(60));
+      console.log("DRY RUN — HVAC Report (not posted to Slack)");
+      console.log("═".repeat(60));
+      console.log("\n📋 ONE-LINER:\n" + summary.oneLiner);
+      console.log("\n📨 SLACK MESSAGE:\n");
+      console.log(summary.slackMessage);
+      console.log("\n" + "═".repeat(60) + "\n");
+      this.writeReportToWorkspace(job.workflowType, summary, publishedAt, undefined, undefined);
+      return {
+        published:   false,
+        message:     summary.slackMessage,
+        publishedAt,
+      };
+    }
 
     if (!slackChannel) {
       logger.warn("slack-publish: no slackChannel configured — skipping", {
@@ -74,20 +72,10 @@ export class SlackPublishStage implements IStage {
       };
     }
 
-    // Build rich Block Kit layout for the report
-    const blocks = buildReportBlocks({
-      title:        reportTitle,
-      oneLiner:     summary.oneLiner,
-      alertLevel:   summary.alertLevel,
-      slackMessage: summary.slackMessage,
-      instanceId:   job.workflowType,
-    });
-
-    // Post to the configured channel
+    // Post the compact message directly as mrkdwn — no Block Kit wrapper
     const ts = await postToSlack({
       channel: slackChannel,
-      text:    `${summary.oneLiner}\n\n${summary.slackMessage}`,  // plain-text fallback
-      blocks,
+      text:    summary.slackMessage,
     });
 
     const published = ts !== undefined;
@@ -107,7 +95,6 @@ export class SlackPublishStage implements IStage {
 
     const publishedAt = new Date().toISOString();
 
-    // Write final report to instance workspace
     this.writeReportToWorkspace(job.workflowType, summary, publishedAt, slackChannel, ts);
 
     return {
@@ -137,7 +124,6 @@ export class SlackPublishStage implements IStage {
       const reportDir = path.join(workspaceDir, "reports");
       fs.mkdirSync(reportDir, { recursive: true });
 
-      // Write dated report file
       const reportPath = path.join(reportDir, `${dateStr}.md`);
       const reportContent = [
         `# Report — ${dateStr}`,
