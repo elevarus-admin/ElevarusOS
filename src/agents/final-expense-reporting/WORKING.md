@@ -19,8 +19,8 @@ Last confirmed working: 2026-04-17
 | Campaign | `O&O_SOMQ_FINAL_EXPENSE` |
 | Meta account | `999576488367816` |
 | Slack channel | `#cli-final-expense` |
-| Schedule | Mon–Fri every 2h: 9am, 11am, 1pm, 3pm, 5pm EST |
-| Cron expression | `0 9,11,13,15,17 * * 1-5` |
+| Schedule | Mon–Fri every 4h: 9am, 1pm, 5pm EST |
+| Cron expression | `0 9,13,17 * * 1-5` |
 | Timezone | `America/New_York` |
 | Base workflow | `ppc-campaign-report` |
 
@@ -64,3 +64,4 @@ Multiple runs on the same day overwrite the same file.
 | Date | Change |
 |------|--------|
 | 2026-04-17 | Agent confirmed active. minCallDurationSeconds behavior documented. WORKING.md updated to operational status log format. |
+| 2026-04-21 | Cadence eased from every 2h (5 runs/day) to every 4h (3 runs/day: 9am, 1pm, 5pm EST). |

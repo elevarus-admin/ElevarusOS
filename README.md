@@ -141,7 +141,7 @@ The short version:
 |---|---|---|---|---|
 | `elevarus-blog` | Blog | blog | On-demand | — |
 | `nes-blog` | Blog | blog | On-demand | — |
-| `final-expense-reporting` | Reporting | ppc-campaign-report | Mon–Fri 9am–5pm ET every 2h | `#cli-final-expense` |
+| `final-expense-reporting` | Reporting | ppc-campaign-report | Mon–Fri 9am–5pm ET every 4h | `#cli-final-expense` |
 | `hvac-reporting` | Reporting | ppc-campaign-report | Disabled (manual) | — |
 | `u65-reporting` | Reporting | ppc-campaign-report | Disabled (manual) | — |
 

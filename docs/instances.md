@@ -196,7 +196,7 @@ On startup, ElevarusOS reads all `instance.md` files and registers each active i
 |----------|--------------|---------|----------|---------------|-------|
 | `elevarus-blog` | blog | yes | On-demand | — | Internal Elevarus marketing blog |
 | `nes-blog` | blog | yes | On-demand | — | HVAC client blog content |
-| `final-expense-reporting` | ppc-campaign-report | yes | Mon–Fri every 2h, 9am–5pm EST | `#cli-final-expense` | Full Ringba + Meta integration |
+| `final-expense-reporting` | ppc-campaign-report | yes | Mon–Fri every 4h, 9am–5pm EST | `#cli-final-expense` | Full Ringba + Meta integration |
 | `hvac-reporting` | ppc-campaign-report | yes | Disabled (cron configured but `enabled: false`) | Not yet set | Pending Slack channel assignment |
 | `u65-reporting` | ppc-campaign-report | yes | Disabled (cron configured but `enabled: false`) | Not yet set | Pending Slack channel assignment |
 
