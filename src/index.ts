@@ -72,6 +72,7 @@ import { buildFinalExpenseReportingWorkflow }   from "./workflows/final-expense-
 import { buildU65ReportingWorkflow }            from "./workflows/u65-reporting/u65-reporting.workflow";
 import { buildHvacReportingWorkflow }           from "./workflows/hvac-reporting/hvac-reporting.workflow";
 import { buildHvacThumbtackImportWorkflow }     from "./workflows/hvac-thumbtack-import/hvac-thumbtack-import.workflow";
+import { buildHvacWeatherNotificationWorkflow } from "./workflows/hvac-weather-notification/hvac-weather-notification.workflow";
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,9 @@ async function main(): Promise<void> {
   registry.register(buildFinalExpenseReportingWorkflow(notifiers));
   registry.register(buildU65ReportingWorkflow(notifiers));
   registry.register(buildHvacReportingWorkflow(notifiers));
+
+  // Notification bots
+  registry.register(buildHvacWeatherNotificationWorkflow(notifiers));
 
   // Background data-import workers
   registry.register(buildHvacThumbtackImportWorkflow(notifiers));
@@ -203,7 +207,27 @@ async function main(): Promise<void> {
 // ─── Sample requests (used by --once and Scheduler) ──────────────────────────
 
 function buildSampleRequest(instanceId: string) {
-  const isReporting = instanceId.includes("reporting");
+  const isReporting    = instanceId.includes("reporting");
+  const isNotification = instanceId.includes("notification");
+
+  if (isNotification) {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      title:         `${instanceId} — ${today}`,
+      brief:         `Daily ${instanceId} run`,
+      audience:      "Elevarus media buyers",
+      targetKeyword: instanceId,
+      cta:           "(none)",
+      approver:      "shane@elevarus.com",
+      workflowType:  instanceId,
+      rawSource: {
+        channel:    "manual" as const,
+        receivedAt: new Date().toISOString(),
+        payload:    { note: `scheduled ${instanceId} run` },
+      },
+      missingFields: [] as any[],
+    };
+  }
 
   if (isReporting) {
     return {
